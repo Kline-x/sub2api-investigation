@@ -18,6 +18,10 @@ func (s *accountHandlerGrokOAuthClientStub) ExchangeCode(context.Context, string
 	return nil, nil
 }
 
+func (s *accountHandlerGrokOAuthClientStub) ConvertSSOToBuild(context.Context, string, string) (*xai.TokenResponse, error) {
+	return nil, nil
+}
+
 func (s *accountHandlerGrokOAuthClientStub) RefreshToken(_ context.Context, refreshToken, _ string, clientID string) (*xai.TokenResponse, error) {
 	s.refreshToken = refreshToken
 	s.clientID = clientID

@@ -1,0 +1,3 @@
+FROM ghcr.io/wei-shaw/sub2api:0.1.155
+
+COPY --chmod=755 backend/server /app/sub2api
