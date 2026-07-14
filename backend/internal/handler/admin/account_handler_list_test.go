@@ -20,28 +20,7 @@ func setupAccountListRouter() (*gin.Engine, *stubAdminService) {
 	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router.GET("/api/v1/admin/accounts", handler.List)
 	router.GET("/api/v1/admin/accounts/ids", handler.ListIDs)
-	router.GET("/api/v1/admin/accounts/quota-summary", handler.QuotaSummary)
 	return router, adminSvc
-}
-
-func TestAccountHandlerQuotaSummaryReturnsFilteredAggregate(t *testing.T) {
-	router, adminSvc := setupAccountListRouter()
-	adminSvc.accountQuotaSummary = &service.AccountQuotaSummary{
-		Status:      service.AccountQuotaStatusSummary{Total: 27, Schedulable: 20, RateLimited: 3},
-		CollectedAt: time.Now().UTC(),
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/quota-summary?platform=grok&type=oauth", nil)
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	var payload struct {
-		Data service.AccountQuotaSummary `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
-	require.Equal(t, 27, payload.Data.Status.Total)
-	require.Equal(t, 20, payload.Data.Status.Schedulable)
 }
 
 func TestAccountHandlerListIDsReturnsAllFilteredAccountIDs(t *testing.T) {

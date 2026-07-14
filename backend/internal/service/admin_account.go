@@ -33,14 +33,6 @@ func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilter(ctx context.Conte
 	return s.accountRepo.ListAllWithFilters(ctx, platform, accountType, status, search, groupID, privacyMode)
 }
 
-func (s *adminServiceImpl) GetAccountQuotaSummary(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) (*AccountQuotaSummary, error) {
-	accounts, err := s.accountRepo.ListAllWithFilters(ctx, platform, accountType, status, search, groupID, privacyMode)
-	if err != nil {
-		return nil, err
-	}
-	return buildAccountQuotaSummary(accounts, time.Now()), nil
-}
-
 func (s *adminServiceImpl) ListOpenAISchedulableAccountsForSchedulerScore(ctx context.Context, groupID *int64) ([]Account, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, nil

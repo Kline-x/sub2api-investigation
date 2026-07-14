@@ -15,7 +15,6 @@ type stubAdminService struct {
 	groups                              []service.Group
 	accounts                            []service.Account
 	accountSchedulerScoreFilterAccounts []service.Account
-	accountQuotaSummary                 *service.AccountQuotaSummary
 	openAISchedulerScorePoolAccounts    []service.Account
 	schedulerScoreFilterCalls           int
 	openAISchedulerScorePoolCalls       int
@@ -362,13 +361,6 @@ func (s *stubAdminService) ListAccountsForSchedulerScoreFilter(_ context.Context
 		return s.accountSchedulerScoreFilterAccounts, nil
 	}
 	return s.accounts, nil
-}
-
-func (s *stubAdminService) GetAccountQuotaSummary(_ context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) (*service.AccountQuotaSummary, error) {
-	if s.accountQuotaSummary != nil {
-		return s.accountQuotaSummary, nil
-	}
-	return &service.AccountQuotaSummary{CollectedAt: time.Now().UTC()}, nil
 }
 
 func (s *stubAdminService) ListOpenAISchedulableAccountsForSchedulerScore(_ context.Context, groupID *int64) ([]service.Account, error) {
