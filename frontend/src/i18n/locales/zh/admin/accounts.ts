@@ -422,6 +422,8 @@ export default {
         partialSuccess: '操作部分完成：{success} 成功，{failed} 失败'
       },
       bulkEdit: {
+        neverExpires: '永不过期',
+        expiresAtRequired: '请选择过期时间或勾选永不过期',
         title: '批量编辑账号',
         selectionInfo: '已选择 {count} 个账号。只更新您勾选或填写的字段，未勾选的字段保持不变。',
         baseUrlPlaceholder: 'https://api.anthropic.com 或 https://api.openai.com',

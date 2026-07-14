@@ -757,6 +757,43 @@
         </div>
       </div>
 
+      <!-- Account expiration -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <label id="bulk-edit-expires-at-label" class="input-label mb-0" for="bulk-edit-expires-at-enabled">
+            {{ t('admin.accounts.expiresAt') }}
+          </label>
+          <input
+            v-model="enableExpiresAt"
+            id="bulk-edit-expires-at-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-expires-at-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div id="bulk-edit-expires-at-body" class="space-y-3" :class="!enableExpiresAt && 'pointer-events-none opacity-50'">
+          <input
+            v-model="expiresAtInput"
+            id="bulk-edit-expires-at"
+            type="datetime-local"
+            :disabled="!enableExpiresAt || neverExpires"
+            class="input"
+            :class="(!enableExpiresAt || neverExpires) && 'cursor-not-allowed opacity-50'"
+            aria-labelledby="bulk-edit-expires-at-label"
+          />
+          <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+            <input
+              v-model="neverExpires"
+              id="bulk-edit-never-expires"
+              type="checkbox"
+              :disabled="!enableExpiresAt"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            {{ t('admin.accounts.bulkEdit.neverExpires') }}
+          </label>
+        </div>
+      </div>
+
       <!-- Status -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1403,6 +1440,7 @@ const enableLoadFactor = ref(false)
 const enablePriority = ref(false)
 const enableRateMultiplier = ref(false)
 const enableStatus = ref(false)
+const enableExpiresAt = ref(false)
 const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
 const enableOpenAIWSMode = ref(false)
@@ -1464,6 +1502,8 @@ const loadFactor = ref<number | null>(null)
 const priority = ref(1)
 const rateMultiplier = ref(1)
 const status = ref<'active' | 'inactive'>('active')
+const expiresAtInput = ref('')
+const neverExpires = ref(false)
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -1648,6 +1688,12 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enableStatus.value) {
     updates.status = status.value
+  }
+
+  if (enableExpiresAt.value) {
+    updates.expires_at = neverExpires.value
+      ? null
+      : Math.floor(new Date(expiresAtInput.value).getTime() / 1000)
   }
 
   if (enableGroups.value) {
@@ -1844,6 +1890,7 @@ const handleSubmit = async () => {
     enablePriority.value ||
     enableRateMultiplier.value ||
     enableStatus.value ||
+    enableExpiresAt.value ||
     enableGroups.value ||
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
@@ -1856,6 +1903,11 @@ const handleSubmit = async () => {
 
   if (!hasAnyFieldEnabled) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
+    return
+  }
+
+  if (enableExpiresAt.value && !neverExpires.value && !expiresAtInput.value) {
+    appStore.showError(t('admin.accounts.bulkEdit.expiresAtRequired'))
     return
   }
 
@@ -1961,6 +2013,7 @@ watch(
       enablePriority.value = false
       enableRateMultiplier.value = false
       enableStatus.value = false
+      enableExpiresAt.value = false
       enableGroups.value = false
       enableOpenAIPassthrough.value = false
       enableOpenAIWSMode.value = false
@@ -1988,6 +2041,8 @@ watch(
       priority.value = 1
       rateMultiplier.value = 1
       status.value = 'active'
+      expiresAtInput.value = ''
+      neverExpires.value = false
       groupIds.value = []
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF

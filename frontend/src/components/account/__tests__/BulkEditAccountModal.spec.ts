@@ -88,6 +88,33 @@ describe('BulkEditAccountModal', () => {
     } as any)
   })
 
+  it('submits a bulk account expiration timestamp', async () => {
+    const wrapper = mountModal()
+    const value = '2026-08-01T12:00'
+
+    await wrapper.get('#bulk-edit-expires-at-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-expires-at').setValue(value)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      expires_at: Math.floor(new Date(value).getTime() / 1000)
+    })
+  })
+
+  it('submits null to clear bulk account expiration', async () => {
+    const wrapper = mountModal()
+
+    await wrapper.get('#bulk-edit-expires-at-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-never-expires').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      expires_at: null
+    })
+  })
+
   it('antigravity 白名单包含 Gemini 图片模型且过滤掉普通 GPT 模型', async () => {
     const wrapper = mountModal()
     const selector = wrapper.findComponent(ModelWhitelistSelector)

@@ -362,6 +362,8 @@ type BulkUpdateAccountsInput struct {
 	LoadFactor     *int
 	Status         string
 	Schedulable    *bool
+	ExpiresAtSet   bool
+	ExpiresAt      *time.Time
 	GroupIDs       *[]int64
 	Credentials    map[string]any
 	Extra          map[string]any

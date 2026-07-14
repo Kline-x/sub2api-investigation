@@ -150,6 +150,7 @@ type BulkUpdateAccountsRequest struct {
 	LoadFactor              *int                      `json:"load_factor"`
 	Status                  string                    `json:"status" binding:"omitempty,oneof=active inactive error"`
 	Schedulable             *bool                     `json:"schedulable"`
+	ExpiresAt               dto.NullableInt64Field    `json:"expires_at"`
 	GroupIDs                *[]int64                  `json:"group_ids"`
 	Credentials             map[string]any            `json:"credentials"`
 	Extra                   map[string]any            `json:"extra"`
@@ -1851,6 +1852,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		req.LoadFactor != nil ||
 		req.Status != "" ||
 		req.Schedulable != nil ||
+		req.ExpiresAt.Set ||
 		req.GroupIDs != nil ||
 		len(req.Credentials) > 0 ||
 		len(req.Extra) > 0
@@ -1858,6 +1860,12 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 	if !hasUpdates {
 		response.BadRequest(c, "No updates provided")
 		return
+	}
+
+	var expiresAt *time.Time
+	if req.ExpiresAt.Value != nil {
+		value := time.Unix(*req.ExpiresAt.Value, 0)
+		expiresAt = &value
 	}
 
 	result, err := h.adminService.BulkUpdateAccounts(c.Request.Context(), &service.BulkUpdateAccountsInput{
@@ -1871,6 +1879,8 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		LoadFactor:            req.LoadFactor,
 		Status:                req.Status,
 		Schedulable:           req.Schedulable,
+		ExpiresAtSet:          req.ExpiresAt.Set,
+		ExpiresAt:             expiresAt,
 		GroupIDs:              req.GroupIDs,
 		Credentials:           req.Credentials,
 		Extra:                 req.Extra,

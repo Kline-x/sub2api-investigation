@@ -330,6 +330,8 @@ export default {
         failed: 'Bulk update failed',
         noSelection: 'Please select accounts to edit',
         noFieldsSelected: 'Select at least one field to update',
+        neverExpires: 'Never expires',
+        expiresAtRequired: 'Select an expiration time or choose Never expires',
         mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.'
       },
       bulkDeleteTitle: 'Bulk Delete Accounts',

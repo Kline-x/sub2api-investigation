@@ -1723,6 +1723,15 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Schedulable)
 		idx++
 	}
+	if updates.ExpiresAtSet {
+		if updates.ExpiresAt == nil {
+			setClauses = append(setClauses, "expires_at = NULL")
+		} else {
+			setClauses = append(setClauses, "expires_at = $"+itoa(idx))
+			args = append(args, *updates.ExpiresAt)
+			idx++
+		}
+	}
 	// JSONB 需要合并而非覆盖，使用 raw SQL 保持旧行为。
 	if len(updates.Credentials) > 0 {
 		payload, err := json.Marshal(updates.Credentials)

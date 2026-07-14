@@ -576,6 +576,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.Schedulable != nil {
 		repoUpdates.Schedulable = input.Schedulable
 	}
+	if input.ExpiresAtSet {
+		repoUpdates.ExpiresAtSet = true
+		repoUpdates.ExpiresAt = input.ExpiresAt
+	}
 
 	// Run bulk update for column/jsonb fields first.
 	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {

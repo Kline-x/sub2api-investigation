@@ -101,6 +101,8 @@ type AccountBulkUpdate struct {
 	LoadFactor     *int
 	Status         *string
 	Schedulable    *bool
+	ExpiresAtSet   bool
+	ExpiresAt      *time.Time
 	Credentials    map[string]any
 	Extra          map[string]any
 }

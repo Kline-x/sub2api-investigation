@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,7 @@ type accountRepoStubForBulkUpdate struct {
 	accountRepoStub
 	bulkUpdateErr    error
 	bulkUpdateIDs    []int64
+	bulkUpdateValue  AccountBulkUpdate
 	bindGroupErrByID map[int64]error
 	bindGroupsCalls  []int64
 	getByIDsAccounts []*Account
@@ -42,12 +44,46 @@ type accountRepoStubForBulkUpdate struct {
 	}
 }
 
-func (s *accountRepoStubForBulkUpdate) BulkUpdate(_ context.Context, ids []int64, _ AccountBulkUpdate) (int64, error) {
+func (s *accountRepoStubForBulkUpdate) BulkUpdate(_ context.Context, ids []int64, updates AccountBulkUpdate) (int64, error) {
 	s.bulkUpdateIDs = append([]int64{}, ids...)
+	s.bulkUpdateValue = updates
 	if s.bulkUpdateErr != nil {
 		return 0, s.bulkUpdateErr
 	}
 	return int64(len(ids)), nil
+}
+
+func TestAdminServiceBulkUpdateAccountsExpirationTriState(t *testing.T) {
+	expiresAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		set       bool
+		value     *time.Time
+		wantSet   bool
+		wantValue *time.Time
+	}{
+		{name: "set", set: true, value: &expiresAt, wantSet: true, wantValue: &expiresAt},
+		{name: "clear", set: true, value: nil, wantSet: true, wantValue: nil},
+		{name: "omit", set: false, value: nil, wantSet: false, wantValue: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &accountRepoStubForBulkUpdate{}
+			svc := &adminServiceImpl{accountRepo: repo}
+			schedulable := true
+
+			_, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+				AccountIDs:   []int64{1},
+				Schedulable:  &schedulable,
+				ExpiresAtSet: tt.set,
+				ExpiresAt:    tt.value,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.wantSet, repo.bulkUpdateValue.ExpiresAtSet)
+			require.Equal(t, tt.wantValue, repo.bulkUpdateValue.ExpiresAt)
+		})
+	}
 }
 
 func (s *accountRepoStubForBulkUpdate) BindGroups(_ context.Context, accountID int64, _ []int64) error {
