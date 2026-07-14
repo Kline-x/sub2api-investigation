@@ -174,6 +174,10 @@
       <template #table>
         <AccountBulkActionsBar
           :selected-ids="selIds"
+          :filtered-total="pagination.total"
+          :all-visible-selected="allVisibleSelected"
+          :all-filtered-selected="allFilteredSelected"
+          :selecting-all="selectingAllFiltered"
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
@@ -181,6 +185,7 @@
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
           @select-page="selectPage"
+          @select-filtered="selectAllFiltered"
           @toggle-schedulable="handleBulkToggleSchedulable"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -864,6 +869,33 @@ const {
   getId: (account) => account.id
 })
 
+const selectingAllFiltered = ref(false)
+const allFilteredSelected = computed(() => (
+  pagination.total > 0 && selIds.value.length === pagination.total
+))
+
+const currentAccountFilters = () => ({
+  platform: params.platform,
+  type: params.type,
+  status: params.status,
+  group: params.group,
+  search: params.search,
+  privacy_mode: params.privacy_mode
+})
+
+const selectAllFiltered = async () => {
+  if (selectingAllFiltered.value) return
+  selectingAllFiltered.value = true
+  try {
+    const result = await adminAPI.accounts.listIDs(currentAccountFilters())
+    setSelectedIds(result.ids)
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.accounts.bulkActions.selectAllFailed'))
+  } finally {
+    selectingAllFiltered.value = false
+  }
+}
+
 const swipeVirtualContext: SwipeSelectVirtualContext = {
   getVirtualizer: () => dataTableRef.value?.virtualizer ?? null,
   getSortedData: () => dataTableRef.value?.sortedData ?? accounts.value,
@@ -910,6 +942,7 @@ const reload = async () => {
 }
 
 const debouncedReload = () => {
+  clearSelection()
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
@@ -1700,13 +1733,20 @@ const handleSchedule = async (a: Account) => {
 }
 const closeSchedulePanel = () => { showSchedulePanel.value = false; scheduleAcc.value = null; scheduleModelOptions.value = [] }
 const handleReAuth = (a: Account) => { reAuthAcc.value = a; showReAuth.value = true }
+const refreshingCredentialAccountIDs = new Set<number>()
 const handleRefresh = async (a: Account) => {
+  if (refreshingCredentialAccountIDs.has(a.id)) return
+  refreshingCredentialAccountIDs.add(a.id)
   try {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(updated)
     enterAutoRefreshSilentWindow()
-  } catch (error) {
+    appStore.showSuccess(t('admin.accounts.refreshTokenSuccess'))
+  } catch (error: any) {
     console.error('Failed to refresh credentials:', error)
+    appStore.showError(error?.message || t('admin.accounts.refreshTokenFailed'))
+  } finally {
+    refreshingCredentialAccountIDs.delete(a.id)
   }
 }
 const handleRecoverState = async (a: Account) => {

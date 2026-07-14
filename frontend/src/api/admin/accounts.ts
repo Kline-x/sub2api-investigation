@@ -23,6 +23,20 @@ import type {
   CheckMixedChannelResponse
 } from '@/types'
 
+export interface AccountListFilters {
+  platform?: string
+  type?: string
+  status?: string
+  group?: string
+  search?: string
+  privacy_mode?: string
+}
+
+export interface AccountIDsResponse {
+  ids: number[]
+  total: number
+}
+
 /**
  * List all accounts with pagination
  * @param page - Page number (default: 1)
@@ -56,6 +70,13 @@ export async function list(
       ...filters
     },
     signal: options?.signal
+  })
+  return data
+}
+
+export async function listIDs(filters?: AccountListFilters): Promise<AccountIDsResponse> {
+  const { data } = await apiClient.get<AccountIDsResponse>('/admin/accounts/ids', {
+    params: filters
   })
   return data
 }
@@ -806,6 +827,7 @@ export async function createSparkShadow(parentId: number, payload: SparkShadowCr
 
 export const accountsAPI = {
   list,
+  listIDs,
   listWithEtag,
   getById,
   create,
