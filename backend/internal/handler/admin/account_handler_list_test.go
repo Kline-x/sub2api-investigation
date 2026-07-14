@@ -19,7 +19,49 @@ func setupAccountListRouter() (*gin.Engine, *stubAdminService) {
 	adminSvc := newStubAdminService()
 	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router.GET("/api/v1/admin/accounts", handler.List)
+	router.GET("/api/v1/admin/accounts/ids", handler.ListIDs)
+	router.GET("/api/v1/admin/accounts/quota-summary", handler.QuotaSummary)
 	return router, adminSvc
+}
+
+func TestAccountHandlerQuotaSummaryReturnsFilteredAggregate(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+	adminSvc.accountQuotaSummary = &service.AccountQuotaSummary{
+		Status:      service.AccountQuotaStatusSummary{Total: 27, Schedulable: 20, RateLimited: 3},
+		CollectedAt: time.Now().UTC(),
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/quota-summary?platform=grok&type=oauth", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var payload struct {
+		Data service.AccountQuotaSummary `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, 27, payload.Data.Status.Total)
+	require.Equal(t, 20, payload.Data.Status.Schedulable)
+}
+
+func TestAccountHandlerListIDsReturnsAllFilteredAccountIDs(t *testing.T) {
+	router, adminSvc := setupAccountListRouter()
+	adminSvc.accountSchedulerScoreFilterAccounts = []service.Account{{ID: 11}, {ID: 19}}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/ids?platform=grok&type=oauth&status=active&group=7&search=mail&privacy_mode=standard", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var payload struct {
+		Data struct {
+			IDs   []int64 `json:"ids"`
+			Total int     `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, []int64{11, 19}, payload.Data.IDs)
+	require.Equal(t, 2, payload.Data.Total)
 }
 
 func TestAccountHandlerListIncludesCreatedAt(t *testing.T) {

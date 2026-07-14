@@ -664,6 +664,80 @@ func (h *AccountHandler) List(c *gin.Context) {
 	response.Paginated(c, result, total, page, pageSize)
 }
 
+// ListIDs returns every account ID matching the account-list filters.
+func (h *AccountHandler) ListIDs(c *gin.Context) {
+	platform := c.Query("platform")
+	accountType := c.Query("type")
+	status := c.Query("status")
+	search := strings.TrimSpace(c.Query("search"))
+	privacyMode := strings.TrimSpace(c.Query("privacy_mode"))
+	if len(search) > 100 {
+		search = search[:100]
+	}
+
+	var groupID int64
+	if groupIDStr := c.Query("group"); groupIDStr != "" {
+		if groupIDStr == accountListGroupUngroupedQueryValue {
+			groupID = service.AccountListGroupUngrouped
+		} else {
+			parsedGroupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+			if err != nil || parsedGroupID < 0 {
+				response.ErrorFrom(c, infraerrors.BadRequest("INVALID_GROUP_FILTER", "invalid group filter"))
+				return
+			}
+			groupID = parsedGroupID
+		}
+	}
+
+	accounts, err := h.adminService.ListAccountsForSchedulerScoreFilter(
+		c.Request.Context(), platform, accountType, status, search, groupID, privacyMode,
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	ids := make([]int64, len(accounts))
+	for i := range accounts {
+		ids[i] = accounts[i].ID
+	}
+	response.Success(c, gin.H{"ids": ids, "total": len(ids)})
+}
+
+// QuotaSummary aggregates persisted account state without probing upstreams.
+func (h *AccountHandler) QuotaSummary(c *gin.Context) {
+	platform := c.Query("platform")
+	accountType := c.Query("type")
+	status := c.Query("status")
+	search := strings.TrimSpace(c.Query("search"))
+	privacyMode := strings.TrimSpace(c.Query("privacy_mode"))
+	if len(search) > 100 {
+		search = search[:100]
+	}
+
+	var groupID int64
+	if groupIDStr := c.Query("group"); groupIDStr != "" {
+		if groupIDStr == accountListGroupUngroupedQueryValue {
+			groupID = service.AccountListGroupUngrouped
+		} else {
+			parsedGroupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+			if err != nil || parsedGroupID < 0 {
+				response.ErrorFrom(c, infraerrors.BadRequest("INVALID_GROUP_FILTER", "invalid group filter"))
+				return
+			}
+			groupID = parsedGroupID
+		}
+	}
+
+	summary, err := h.adminService.GetAccountQuotaSummary(
+		c.Request.Context(), platform, accountType, status, search, groupID, privacyMode,
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, summary)
+}
+
 func buildAccountsListETag(
 	items []AccountWithConcurrency,
 	total int64,
