@@ -61,6 +61,7 @@ type AccountHandler struct {
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
 	grokImportProber        grokUsageProber
+	grokOAuthService        *service.GrokOAuthService
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -78,6 +79,7 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	grokOAuthService *service.GrokOAuthService,
 ) *AccountHandler {
 	return &AccountHandler{
 		adminService:            adminService,
@@ -93,6 +95,7 @@ func NewAccountHandler(
 		sessionLimitCache:       sessionLimitCache,
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
+		grokOAuthService:        grokOAuthService,
 	}
 }
 
@@ -1177,6 +1180,18 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		if account.Status == service.StatusError && strings.Contains(account.ErrorMessage, "missing_project_id:") {
 			if _, clearErr := h.adminService.ClearAccountError(ctx, account.ID); clearErr != nil {
 				return nil, "", fmt.Errorf("failed to clear account error: %w", clearErr)
+			}
+		}
+	} else if account.Platform == service.PlatformGrok {
+		tokenInfo, err := h.grokOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", err
+		}
+
+		newCredentials = h.grokOAuthService.BuildAccountCredentials(tokenInfo)
+		for k, v := range account.Credentials {
+			if _, exists := newCredentials[k]; !exists {
+				newCredentials[k] = v
 			}
 		}
 	} else {
