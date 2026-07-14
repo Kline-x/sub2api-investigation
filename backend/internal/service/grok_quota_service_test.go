@@ -468,6 +468,44 @@ func TestGrokQuotaServiceProbeUsageReturnsRateLimitedSnapshot(t *testing.T) {
 	require.Zero(t, repo.tempUnschedCalls)
 }
 
+func TestGrokQuotaServiceProbeUsageFreeExhaustionBlocksFor24Hours(t *testing.T) {
+	t.Parallel()
+
+	account := &Account{
+		ID:       44,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{},
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":"subscription:free-usage-exhausted","error_description":"Usage resets over a rolling 24-hour window"}`,
+		)),
+	}}
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	before := time.Now()
+
+	result, err := svc.ProbeUsage(context.Background(), account.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusTooManyRequests, result.StatusCode)
+	require.GreaterOrEqual(t, repo.rateLimitedCalls, 1)
+	require.WithinDuration(t, before.Add(24*time.Hour), repo.lastRateLimitResetAt, time.Second)
+	marker, ok := repo.updates[account.ID][grokFreeUsageExhaustedUntilExtraKey].(string)
+	require.True(t, ok)
+	markerTime, err := time.Parse(time.RFC3339, marker)
+	require.NoError(t, err)
+	require.WithinDuration(t, before.Add(24*time.Hour), markerTime, time.Second)
+}
+
 func TestGrokQuotaServiceQueryQuotaFreeFallsBackToGrok45(t *testing.T) {
 	t.Parallel()
 

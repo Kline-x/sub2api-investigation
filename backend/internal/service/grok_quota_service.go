@@ -156,15 +156,28 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_REQUEST_FAILED", "upstream probe failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	var responseBody []byte
+	if resp.StatusCode >= 400 {
+		responseBody, _ = io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	}
 
 	snapshot := xai.ObserveQuotaHeaders(resp.Header, resp.StatusCode, "active_probe")
 	resetAt, limited := grokRateLimitResetAt(snapshot, time.Now())
+	freeUsageExhausted := resp.StatusCode == http.StatusTooManyRequests && isGrokFreeUsageExhausted(responseBody)
+	if freeUsageExhausted {
+		resetAt = time.Now().Add(grokFreeUsageWindow)
+		limited = true
+	}
 	if limited {
 		normalizeGrokExhaustedWindowResets(snapshot, resetAt, time.Now())
 	}
-	persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
+	extraUpdates := map[string]any{
 		grokQuotaSnapshotExtraKey: snapshot,
-	})
+	}
+	if freeUsageExhausted {
+		extraUpdates[grokFreeUsageExhaustedUntilExtraKey] = resetAt.UTC().Format(time.RFC3339)
+	}
+	persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, extraUpdates)
 	if limited {
 		persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
 	}
@@ -184,7 +197,6 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 	}
 	if resp.StatusCode >= 400 {
 		const reason = "GROK_QUOTA_PROBE_UPSTREAM_ERROR"
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		slog.Warn(
 			"grok_quota_probe_failed",
 			"account_id", account.ID,

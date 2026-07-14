@@ -25,6 +25,8 @@ const (
 	grokCLIVersion                         = "0.2.93"
 	grokDefaultResponsesModel              = "grok-4.5"
 	grokRateLimitFallbackCooldown          = 2 * time.Minute
+	grokFreeUsageWindow                    = 24 * time.Hour
+	grokFreeUsageExhaustedUntilExtraKey    = "grok_free_usage_exhausted_until"
 )
 
 func (s *OpenAIGatewayService) forwardGrokResponses(
@@ -955,12 +957,31 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok access or entitlement denied")
 	case http.StatusTooManyRequests:
 		// updateGrokUsageSnapshot installs both runtime and durable rate-limit state.
+		if isGrokFreeUsageExhausted(responseBody) {
+			resetAt := now.Add(grokFreeUsageWindow)
+			stateCtx, cancel := openAIAccountStateContext(ctx)
+			defer cancel()
+			if s.accountRepo != nil {
+				_ = s.accountRepo.UpdateExtra(stateCtx, account.ID, map[string]any{
+					grokFreeUsageExhaustedUntilExtraKey: resetAt.UTC().Format(time.RFC3339),
+				})
+			}
+			s.rateLimitGrok(stateCtx, account, resetAt)
+		}
 	default:
 		if statusCode >= 500 {
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
-	_ = responseBody
+}
+
+func isGrokFreeUsageExhausted(body []byte) bool {
+	text := strings.ToLower(string(body))
+	if strings.Contains(text, "subscription:free-usage-exhausted") {
+		return true
+	}
+	return strings.Contains(text, "used all the included free usage") &&
+		strings.Contains(text, "rolling 24-hour window")
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
