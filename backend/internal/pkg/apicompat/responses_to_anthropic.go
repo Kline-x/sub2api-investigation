@@ -436,6 +436,12 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	if state.CurrentBlockType != "tool_use" {
 		return resToAnthHandleBlockDone(state)
 	}
+	// 块已关闭（如上游先发 output_item.done 或重复发 arguments.done）时不能再补发
+	// delta——此时 ContentBlockIndex 已指向下一个从未 start 过的 index，
+	// 发出去客户端（Anthropic SDK）会报 "content block not found"。
+	if !state.ContentBlockOpen {
+		return nil
+	}
 
 	raw := evt.Arguments
 	if raw == "" {
@@ -625,6 +631,7 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	idx := state.ContentBlockIndex
 	state.ContentBlockOpen = false
 	state.ContentBlockIndex++
+	state.CurrentBlockType = ""
 	state.CurrentToolName = ""
 	state.CurrentToolArgs = ""
 	state.CurrentToolHadDelta = false
