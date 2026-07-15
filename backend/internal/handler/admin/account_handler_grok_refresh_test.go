@@ -1,79 +1,99 @@
+//go:build unit
+
 package admin
 
 import (
 	"context"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
-type accountHandlerGrokOAuthClientStub struct {
-	refreshToken string
-	clientID     string
+type grokRefreshOAuthStub struct {
+	account *service.Account
+	info    *service.GrokTokenInfo
+	calls   int
 }
 
-func (s *accountHandlerGrokOAuthClientStub) ExchangeCode(context.Context, string, string, string, string, string) (*xai.TokenResponse, error) {
-	return nil, nil
+func (s *grokRefreshOAuthStub) RefreshAccountToken(_ context.Context, account *service.Account) (*service.GrokTokenInfo, error) {
+	s.calls++
+	s.account = account
+	return s.info, nil
 }
 
-func (s *accountHandlerGrokOAuthClientStub) ConvertSSOToBuild(context.Context, string, string) (*xai.TokenResponse, error) {
-	return nil, nil
+func (s *grokRefreshOAuthStub) BuildAccountCredentials(info *service.GrokTokenInfo) map[string]any {
+	return map[string]any{
+		"access_token":  info.AccessToken,
+		"refresh_token": info.RefreshToken,
+		"expires_at":    info.ExpiresAt,
+		"base_url":      "https://api.x.ai/v1",
+	}
 }
 
-func (s *accountHandlerGrokOAuthClientStub) RefreshToken(_ context.Context, refreshToken, _ string, clientID string) (*xai.TokenResponse, error) {
-	s.refreshToken = refreshToken
-	s.clientID = clientID
-	return &xai.TokenResponse{
-		AccessToken:  "rotated-access-token",
-		RefreshToken: "rotated-refresh-token",
-		TokenType:    "Bearer",
-		ExpiresIn:    3600,
-	}, nil
-}
-
-type accountHandlerGrokAdminService struct {
+type grokRefreshAdminService struct {
 	*stubAdminService
 	updatedCredentials map[string]any
 }
 
-func (s *accountHandlerGrokAdminService) UpdateAccount(_ context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {
+func (s *grokRefreshAdminService) UpdateAccount(_ context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {
 	s.updatedCredentials = input.Credentials
 	return &service.Account{
 		ID:          id,
 		Platform:    service.PlatformGrok,
 		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
 		Credentials: input.Credentials,
 	}, nil
 }
 
-func TestRefreshSingleAccount_GrokUsesGrokOAuthService(t *testing.T) {
-	adminSvc := &accountHandlerGrokAdminService{stubAdminService: newStubAdminService()}
-	client := &accountHandlerGrokOAuthClientStub{}
-	grokOAuthSvc := service.NewGrokOAuthService(nil, client)
-	defer grokOAuthSvc.Stop()
+func TestRefreshSingleAccountRoutesGrokThroughGrokOAuthService(t *testing.T) {
+	t.Parallel()
 
-	h := &AccountHandler{
-		adminService:     adminSvc,
-		grokOAuthService: grokOAuthSvc,
-	}
+	adminSvc := &grokRefreshAdminService{stubAdminService: newStubAdminService()}
+	grokOAuth := &grokRefreshOAuthStub{info: &service.GrokTokenInfo{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+		ExpiresAt:    1_800_000_000,
+	}}
+	handler := NewAccountHandler(
+		adminSvc,
+		nil,
+		nil,
+		nil,
+		nil,
+		grokOAuth,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
 	account := &service.Account{
-		ID:       3,
+		ID:       4227,
 		Platform: service.PlatformGrok,
 		Type:     service.AccountTypeOAuth,
 		Credentials: map[string]any{
-			"refresh_token": "stored-refresh-token",
-			"client_id":     "stored-client-id",
-			"base_url":      "https://cli-chat-proxy.grok.com/v1",
+			"access_token":       "old-access",
+			"refresh_token":      "old-refresh",
+			"base_url":           "https://example.invalid/v1",
+			"subscription_tier":  "SUPER_GROK",
+			"entitlement_status": "ACTIVE",
 		},
 	}
 
-	updated, _, err := h.refreshSingleAccount(context.Background(), account)
+	updated, warning, err := handler.refreshSingleAccount(context.Background(), account)
 	require.NoError(t, err)
-	require.Equal(t, "stored-refresh-token", client.refreshToken)
-	require.Equal(t, "stored-client-id", client.clientID)
-	require.Equal(t, "rotated-access-token", updated.Credentials["access_token"])
-	require.Equal(t, "rotated-refresh-token", updated.Credentials["refresh_token"])
-	require.Equal(t, "https://cli-chat-proxy.grok.com/v1", updated.Credentials["base_url"])
+	require.Empty(t, warning)
+	require.Equal(t, 1, grokOAuth.calls)
+	require.Same(t, account, grokOAuth.account)
+	require.Equal(t, "new-access", adminSvc.updatedCredentials["access_token"])
+	require.Equal(t, "new-refresh", adminSvc.updatedCredentials["refresh_token"])
+	require.Equal(t, "https://example.invalid/v1", adminSvc.updatedCredentials["base_url"])
+	require.Equal(t, "SUPER_GROK", adminSvc.updatedCredentials["subscription_tier"])
+	require.Equal(t, "ACTIVE", adminSvc.updatedCredentials["entitlement_status"])
+	require.Equal(t, adminSvc.updatedCredentials, updated.Credentials)
 }

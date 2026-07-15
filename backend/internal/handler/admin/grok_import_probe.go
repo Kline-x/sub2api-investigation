@@ -173,6 +173,7 @@ func ProvideAccountHandler(
 	openaiOAuthService *service.OpenAIOAuthService,
 	geminiOAuthService *service.GeminiOAuthService,
 	antigravityOAuthService *service.AntigravityOAuthService,
+	grokOAuthService service.GrokOAuthTokenService,
 	rateLimitService *service.RateLimitService,
 	accountUsageService *service.AccountUsageService,
 	accountTestService *service.AccountTestService,
@@ -182,7 +183,6 @@ func ProvideAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	grokQuotaService *service.GrokQuotaService,
-	grokOAuthService *service.GrokOAuthService,
 ) *AccountHandler {
 	handler := NewAccountHandler(
 		adminService,
@@ -190,6 +190,7 @@ func ProvideAccountHandler(
 		openaiOAuthService,
 		geminiOAuthService,
 		antigravityOAuthService,
+		grokOAuthService,
 		rateLimitService,
 		accountUsageService,
 		accountTestService,
@@ -198,7 +199,6 @@ func ProvideAccountHandler(
 		sessionLimitCache,
 		rpmCache,
 		tokenCacheInvalidator,
-		grokOAuthService,
 	)
 	handler.grokImportProber = grokQuotaService
 	return handler
