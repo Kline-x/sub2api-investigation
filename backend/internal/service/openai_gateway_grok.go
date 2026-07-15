@@ -27,7 +27,87 @@ const (
 	grokRateLimitFallbackCooldown          = 2 * time.Minute
 	grokFreeUsageWindow                    = 24 * time.Hour
 	grokFreeUsageExhaustedUntilExtraKey    = "grok_free_usage_exhausted_until"
+	// 裸 429(无 retry-after / 无窗口 reset / 非 free 耗尽文案)连击的递增封禁上限,
+	// 以及连击多久无复发后归零重计。
+	grokBare429EscalationCap    = time.Hour
+	grokBare429StreakStaleAfter = 2 * time.Hour
 )
+
+// grokBare429State 记录单个账号连续「裸 429」的连击状态。
+// 只有上一轮封禁到期后又立刻裸 429 才算连击(封禁期内的并发在途 429 不叠加),
+// 用于对无明确 reset 信息的限流做指数递增封禁,避免固定 2 分钟兜底导致
+// 配额实际未恢复的账号反复进出调度池。
+type grokBare429State struct {
+	count        int
+	blockedUntil time.Time
+}
+
+func nextGrokBare429State(prev grokBare429State, now time.Time) (grokBare429State, time.Duration, bool) {
+	if now.Before(prev.blockedUntil) {
+		return prev, 0, false
+	}
+	count := prev.count + 1
+	if prev.count == 0 || now.Sub(prev.blockedUntil) > grokBare429StreakStaleAfter {
+		count = 1
+	}
+	cooldown := time.Duration(grokRateLimitFallbackCooldown)
+	for i := 1; i < count; i++ {
+		cooldown *= 2
+		if cooldown >= grokBare429EscalationCap {
+			cooldown = grokBare429EscalationCap
+			break
+		}
+	}
+	return grokBare429State{count: count, blockedUntil: now.Add(cooldown)}, cooldown, true
+}
+
+// grokSnapshotHasExplicitRateLimitReset 报告 429 响应是否带有可用的恢复时间信息
+// (retry-after,或已耗尽窗口的未来 reset)。没有时才走裸 429 递增封禁。
+func grokSnapshotHasExplicitRateLimitReset(snapshot *xai.QuotaSnapshot, now time.Time) bool {
+	if snapshot == nil {
+		return false
+	}
+	if snapshot.RetryAfterSeconds != nil && *snapshot.RetryAfterSeconds > 0 {
+		return true
+	}
+	for _, window := range []*xai.QuotaWindow{snapshot.Requests, snapshot.Tokens} {
+		if window == nil || window.Remaining == nil || *window.Remaining > 0 {
+			continue
+		}
+		if window.ResetUnix != nil && *window.ResetUnix > 0 && time.Unix(*window.ResetUnix, 0).After(now) {
+			return true
+		}
+		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(window.ResetAt)); err == nil && parsed.After(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// escalateGrokBare429 对无明确 reset 信息的 429 做连击递增封禁,并记录原始 body,
+// 便于 xAI 更换限流文案时(isGrokFreeUsageExhausted 匹配不上)从日志补齐模式。
+func (s *OpenAIGatewayService) escalateGrokBare429(ctx context.Context, account *Account, responseBody []byte, now time.Time) {
+	if s == nil || account == nil || account.ID <= 0 {
+		return
+	}
+	value, _ := s.grokBare429States.Load(account.ID)
+	prev, _ := value.(grokBare429State)
+	next, cooldown, escalate := nextGrokBare429State(prev, now)
+	if !escalate {
+		return
+	}
+	s.grokBare429States.Store(account.ID, next)
+	slog.Warn("grok_unrecognized_429",
+		"account_id", account.ID,
+		"streak", next.count,
+		"cooldown", cooldown.String(),
+		"body", truncate(strings.TrimSpace(string(responseBody)), 500),
+	)
+	// 首次裸 429 的 2 分钟封禁已由 updateGrokUsageSnapshot 的兜底逻辑落库,不重复写。
+	if next.count > 1 {
+		s.rateLimitGrok(ctx, account, now.Add(cooldown))
+	}
+}
 
 func (s *OpenAIGatewayService) forwardGrokResponses(
 	ctx context.Context,
@@ -967,6 +1047,10 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 				})
 			}
 			s.rateLimitGrok(stateCtx, account, resetAt)
+		} else if !grokSnapshotHasExplicitRateLimitReset(parseGrokQuotaSnapshot(headers, statusCode, now), now) {
+			// 无任何恢复时间信息的 429:2 分钟兜底会让配额未恢复的账号反复
+			// 进出调度池,这里按连击做指数递增封禁并记录原始 body。
+			s.escalateGrokBare429(ctx, account, responseBody, now)
 		}
 	default:
 		if statusCode >= 500 {
