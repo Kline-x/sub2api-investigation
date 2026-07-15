@@ -185,8 +185,10 @@ func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account
 	if statusCode != http.StatusTooManyRequests || failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}
+	// Grok free/paid quota is account-scoped: keep switching across accounts on 429.
+	// Only stop OpenAI OAuth failover during a global 429 storm to avoid thrashing.
 	if isGrokOAuthAccount(account) {
-		return true
+		return false
 	}
 	if !isOpenAIOAuthAccount(account) {
 		return false

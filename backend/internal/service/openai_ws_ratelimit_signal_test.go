@@ -162,8 +162,12 @@ func TestOpenAIGatewayService_Forward_WSv2ErrorEventUsageLimitPersistsRateLimit(
 	result, err := svc.Forward(context.Background(), c, &account, body)
 	require.Error(t, err)
 	require.Nil(t, result)
-	require.Equal(t, http.StatusTooManyRequests, rec.Code)
-	require.Nil(t, upstream.lastReq, "WS 限流 error event 不应回退到同账号 HTTP")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.False(t, c.Writer.Written(), "rate-limit must failover without writing final 429 to client")
+	require.Zero(t, rec.Body.Len(), "rate-limit must failover without writing final 429 to client")
+	require.Nil(t, upstream.lastReq, "WS rate-limit error event must not fall back to same-account HTTP")
 	require.Len(t, repo.rateLimitCalls, 1)
 	require.WithinDuration(t, time.Unix(resetAt, 0), repo.rateLimitCalls[0], 2*time.Second)
 }
@@ -232,10 +236,14 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testi
 	result, err := svc.Forward(context.Background(), c, &account, body)
 	require.Error(t, err)
 	require.Nil(t, result)
-	require.Equal(t, http.StatusTooManyRequests, rec.Code)
-	require.Nil(t, upstream.lastReq, "WS 握手 429 不应回退到同账号 HTTP")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.False(t, c.Writer.Written(), "WS handshake 429 must failover without writing final 429 to client")
+	require.Zero(t, rec.Body.Len(), "WS handshake 429 must failover without writing final 429 to client")
+	require.Nil(t, upstream.lastReq, "WS handshake 429 must not fall back to same-account HTTP")
 	require.Len(t, repo.rateLimitCalls, 1)
-	require.NotEmpty(t, repo.updateExtra, "握手 429 的 x-codex 头应立即落库")
+	require.NotEmpty(t, repo.updateExtra, "handshake 429 x-codex headers should be persisted")
 	require.Contains(t, repo.updateExtra[0], "codex_usage_updated_at")
 }
 

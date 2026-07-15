@@ -212,6 +212,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		var dialErr *openAIWSDialError
 		if errors.As(err, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
 			s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()))
+			// Rate-limit on WS handshake should switch accounts, not be written downstream as final 429.
+			return nil, &UpstreamFailoverError{
+				StatusCode:             http.StatusTooManyRequests,
+				ResponseHeaders:        cloneHeader(dialErr.ResponseHeaders),
+				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(http.StatusTooManyRequests),
+			}
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
@@ -566,6 +572,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			// error 事件后连接不再可复用，避免回池后污染下一请求。
 			lease.MarkBroken()
+			// Account-level rate limits must failover before any downstream bytes are committed.
+			if !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+				return nil, &UpstreamFailoverError{
+					StatusCode:             http.StatusTooManyRequests,
+					ResponseBody:           append([]byte(nil), message...),
+					ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+					RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(http.StatusTooManyRequests),
+				}
+			}
 			if !wroteDownstream && canFallback {
 				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
 			}

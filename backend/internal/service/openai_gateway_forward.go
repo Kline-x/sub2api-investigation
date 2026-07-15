@@ -590,6 +590,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if c != nil && c.Writer != nil && c.Writer.Written() {
 				break
 			}
+			// Account failover errors must leave the same-account WS reconnect loop immediately.
+			var accountFailoverErr *UpstreamFailoverError
+			if errors.As(wsErr, &accountFailoverErr) {
+				break
+			}
 
 			reason, retryable := classifyOpenAIWSReconnectReason(wsErr)
 			if reason != "" {
@@ -690,6 +695,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				wsResult.BillingModel = imageBillingModel
 			}
 			return wsResult, nil
+		}
+		// UpstreamFailoverError must bubble to the handler account-switch loop.
+		var failoverErr *UpstreamFailoverError
+		if errors.As(wsErr, &failoverErr) {
+			return nil, failoverErr
 		}
 		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
 		return nil, wsErr
