@@ -185,3 +185,31 @@ func TestUpdateServiceRollbackToVersionAcceptsVPrefix(t *testing.T) {
 	require.NotErrorIs(t, err, ErrRollbackVersionNotAllowed)
 	require.Contains(t, err.Error(), "no compatible release found")
 }
+
+func TestParseVersionCustomSuffix(t *testing.T) {
+	require.Equal(t, [4]int{0, 1, 156, 0}, parseVersion("v0.1.156"))
+	require.Equal(t, [4]int{0, 1, 156, 1}, parseVersion("v0.1.156-custom.1"))
+	require.Equal(t, [4]int{0, 1, 156, 12}, parseVersion("0.1.156-custom.12"))
+	// 旧部署版本格式:custom 后缀为日期序号,也按第 4 段解析
+	require.Equal(t, [4]int{0, 1, 155, 20260714}, parseVersion("0.1.155-custom.20260714"))
+	// 非 custom 的 semver 预发布后缀不计入第 4 段
+	require.Equal(t, [4]int{0, 1, 156, 0}, parseVersion("v0.1.156-rc.1"))
+	// 非法输入兜底为 0
+	require.Equal(t, [4]int{0, 0, 0, 0}, parseVersion("garbage"))
+}
+
+func TestCompareVersionsCustomScheme(t *testing.T) {
+	// 上游对上游(原有行为不变)
+	require.Equal(t, -1, compareVersions("0.1.155", "0.1.156"))
+	require.Equal(t, 0, compareVersions("0.1.156", "v0.1.156"))
+	require.Equal(t, 1, compareVersions("0.1.157", "0.1.156"))
+	// custom 对 custom
+	require.Equal(t, -1, compareVersions("0.1.156-custom.1", "0.1.156-custom.2"))
+	require.Equal(t, 0, compareVersions("0.1.156-custom.1", "0.1.156-custom.1"))
+	// 上游基线 < 同基线 custom
+	require.Equal(t, -1, compareVersions("0.1.156", "0.1.156-custom.1"))
+	// 跨基线:上游新版 > 旧基线任意 custom
+	require.Equal(t, -1, compareVersions("0.1.156-custom.9", "0.1.157"))
+	// 现部署旧格式 < 新方案首版
+	require.Equal(t, -1, compareVersions("0.1.155-custom.20260714", "0.1.156-custom.1"))
+}
