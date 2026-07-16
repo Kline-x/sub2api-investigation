@@ -791,7 +791,12 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body))
+		// 定制:4xx(非429)代表凭据/权限问题,统一置错停止调度;429 走上方限流持久化,5xx/网络错误不改状态
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests && s.accountRepo != nil {
+			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
+		}
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	return s.processOpenAIStream(c, resp.Body)
