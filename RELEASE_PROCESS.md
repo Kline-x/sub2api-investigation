@@ -62,7 +62,7 @@ git tag -d <tag>                   # 删本地标签
 ## 上游合并
 
 1. `git fetch upstream "+refs/tags/*:refs/tags/*"`（upstream = Wei-Shaw/sub2api）
-2. 在主线分支 `git merge v<新版本>`，解决冲突（注意 `.goreleaser.simple.yaml`、`update_service.go` 是定制热点）
+2. 在主线分支 `main` 上 `git merge v<新版本>`，解决冲突（注意 `.goreleaser.simple.yaml`、`update_service.go` 是定制热点）
 3. 全量测试通过后按本规范发 `v<新版本>-custom.1`
 4. 旧基线如需保留回滚能力，从合并前提交拉 `custom/vX.Y.Z-maint` 维护分支并 cherry-pick 链路必需改动（参照 `custom/v0.1.155-maint`）
 

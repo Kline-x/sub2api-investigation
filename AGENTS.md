@@ -6,7 +6,7 @@
 
 - origin = `Kline-x/sub2api-investigation`（本仓库，发布/部署来源）
 - upstream = `Wei-Shaw/sub2api`（只用来合并新版本，**永远不要向它推送**）
-- 主线分支：`custom/v0.1.156`（随上游合并演进）；`custom/vX.Y.Z-maint` 是旧基线回滚维护分支
+- 主线分支：`main`（合并上游、发标签都在这里）；`custom/vX.Y.Z-maint` 是旧基线回滚维护分支；`custom/v0.1.155`、`custom/v0.1.156` 是历史分支，不再演进
 - Go module 路径仍是 `github.com/Wei-Shaw/sub2api`，这是刻意保留的，**不要改**
 
 ## 两份必读文档
