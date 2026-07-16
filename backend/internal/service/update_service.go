@@ -637,12 +637,14 @@ func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
 }
 
-// compareVersions compares two semantic versions
+// compareVersions compares two versions of the form X.Y.Z[-custom.N].
+// The custom suffix forms a 4th segment so self-hosted builds sort after
+// their upstream baseline but before the next upstream release.
 func compareVersions(current, latest string) int {
 	currentParts := parseVersion(current)
 	latestParts := parseVersion(latest)
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		if currentParts[i] < latestParts[i] {
 			return -1
 		}
@@ -653,13 +655,19 @@ func compareVersions(current, latest string) int {
 	return 0
 }
 
-func parseVersion(v string) [3]int {
+func parseVersion(v string) [4]int {
 	v = strings.TrimPrefix(v, "v")
-	parts := strings.Split(v, ".")
-	result := [3]int{0, 0, 0}
+	base, suffix, _ := strings.Cut(v, "-")
+	result := [4]int{0, 0, 0, 0}
+	parts := strings.Split(base, ".")
 	for i := 0; i < len(parts) && i < 3; i++ {
 		if parsed, err := strconv.Atoi(parts[i]); err == nil {
 			result[i] = parsed
+		}
+	}
+	if rest, ok := strings.CutPrefix(suffix, "custom."); ok {
+		if parsed, err := strconv.Atoi(rest); err == nil {
+			result[3] = parsed
 		}
 	}
 	return result
