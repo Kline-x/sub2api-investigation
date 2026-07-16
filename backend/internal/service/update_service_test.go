@@ -118,6 +118,26 @@ func TestUpdateServiceListRollbackVersionsSortsUnorderedInput(t *testing.T) {
 	require.Equal(t, "0.1.144", versions[2].Version)
 }
 
+func TestUpdateServiceListRollbackVersionsMixedCustomAndUpstream(t *testing.T) {
+	releases := []*GitHubRelease{
+		{TagName: "v0.1.157", PublishedAt: "2026-07-20T00:00:00Z"},                        // 比当前新:排除
+		{TagName: "v0.1.156-custom.1", PublishedAt: "2026-07-16T00:00:00Z"},               // 当前版本:排除
+		{TagName: "v0.1.156", PublishedAt: "2026-07-15T00:00:00Z"},                        // 比当前旧:入选
+		{TagName: "v0.1.156-rc.1", PublishedAt: "2026-07-14T12:00:00Z", Prerelease: true}, // prerelease:排除
+		{TagName: "v0.1.155-custom.2", PublishedAt: "2026-07-14T00:00:00Z"},               // 比当前旧:入选
+		{TagName: "v0.1.155", PublishedAt: "2026-07-13T00:00:00Z"},                        // 比当前旧:入选
+	}
+	svc := newRollbackTestService("0.1.156-custom.1", releases)
+
+	versions, err := svc.ListRollbackVersions(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, versions, 3)
+	require.Equal(t, "0.1.156", versions[0].Version)
+	require.Equal(t, "0.1.155-custom.2", versions[1].Version)
+	require.Equal(t, "0.1.155", versions[2].Version)
+}
+
 func TestUpdateServiceListRollbackVersionsEmptyWhenNoneOlder(t *testing.T) {
 	releases := []*GitHubRelease{
 		{TagName: "v0.1.147"},
