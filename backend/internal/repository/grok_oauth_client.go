@@ -162,7 +162,12 @@ func grokOAuthStatusError(code, message string, resp *req.Response) error {
 			errorCode = "GROK_OAUTH_ENTITLEMENT_DENIED"
 		}
 	}
-	return infraerrors.Newf(statusCode, errorCode, "%s: status %d, body: %s", message, upstreamStatus, body)
+	appErr := infraerrors.Newf(statusCode, errorCode, "%s: status %d, body: %s", message, upstreamStatus, body)
+	if upstreamStatus > 0 {
+		// 挂结构化上游状态码,供 service.IsGrokRefreshPermanentFailure 分类(定制)
+		return appErr.WithCause(&xai.OAuthUpstreamStatusError{Status: upstreamStatus})
+	}
+	return appErr
 }
 
 func grokOAuthHasExplicitEntitlementDenial(body string) bool {
