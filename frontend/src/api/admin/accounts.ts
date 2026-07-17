@@ -777,6 +777,44 @@ export async function batchRefresh(accountIds: number[]): Promise<BatchOperation
  * @param id - Account ID
  * @returns Updated account
  */
+
+export interface BatchTestResultItem {
+  id: number
+  name: string
+  status: 'success' | 'failed'
+  error_message?: string
+  latency_ms: number
+}
+
+export interface BatchTestResult {
+  total: number
+  success: number
+  failed: number
+  results: BatchTestResultItem[]
+}
+
+/**
+ * 批量测试账号连通性(定制)。
+ * modelsByPlatform 可选: platform → model_id;某平台缺省则后端用该平台默认。
+ */
+export async function batchTest(
+  accountIds: number[],
+  modelsByPlatform?: Record<string, string>
+): Promise<BatchTestResult> {
+  const body: {
+    account_ids: number[]
+    models_by_platform?: Record<string, string>
+  } = {
+    account_ids: accountIds,
+  }
+  if (modelsByPlatform && Object.keys(modelsByPlatform).length > 0) {
+    body.models_by_platform = modelsByPlatform
+  }
+  const { data } = await apiClient.post<BatchTestResult>('/admin/accounts/batch-test', body, {
+    timeout: 300000 // 批量逐账号实测,大批量耗时长
+  })
+  return data
+}
 export async function setPrivacy(id: number): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/set-privacy`)
   return data
@@ -912,6 +950,7 @@ export const accountsAPI = {
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,
+  batchTest,
   setPrivacy,
   revertProxyFallback,
   queryOpenAIQuota,

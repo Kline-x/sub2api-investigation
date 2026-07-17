@@ -181,6 +181,7 @@
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
+          @test="handleBulkTest"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -404,6 +405,13 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
+    <BatchTestConfirmModal
+      :show="showBatchTestModal"
+      :accounts="batchTestAccounts"
+      :account-ids="selIds"
+      @close="showBatchTestModal = false"
+      @confirm="runBulkTest"
+    />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
@@ -452,6 +460,7 @@ import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrs
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
+import BatchTestConfirmModal from '@/components/admin/account/BatchTestConfirmModal.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
@@ -1406,6 +1415,41 @@ const handleBulkResetStatus = async () => {
     reload()
   } catch (error) {
     console.error('Failed to bulk reset status:', error)
+    appStore.showError(String(error))
+  }
+}
+
+const showBatchTestModal = ref(false)
+const batchTestAccounts = computed(() => {
+  const idSet = new Set(selIds.value)
+  return accounts.value
+    .filter((account) => idSet.has(account.id))
+    .map((account) => ({ id: account.id, platform: account.platform }))
+})
+
+const handleBulkTest = () => {
+  if (selIds.value.length === 0) return
+  showBatchTestModal.value = true
+}
+
+const runBulkTest = async (modelsByPlatform: Record<string, string>) => {
+  showBatchTestModal.value = false
+  try {
+    const result = await adminAPI.accounts.batchTest(selIds.value, modelsByPlatform)
+    if (result.failed > 0) {
+      appStore.showError(
+        t('admin.accounts.bulkActions.testCompletedWithFailures', {
+          success: result.success,
+          failed: result.failed
+        })
+      )
+    } else {
+      appStore.showSuccess(t('admin.accounts.bulkActions.testSuccess', { count: result.success }))
+      clearSelection()
+    }
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk test accounts:', error)
     appStore.showError(String(error))
   }
 }
