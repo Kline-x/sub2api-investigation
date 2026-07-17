@@ -480,7 +480,10 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
 			privacyAccounts = append(privacyAccounts, created)
 		}
-		h.scheduleGrokImportProbe(created)
+		// 定制:grok OAuth 账号导入后进入「刷新→测试」后台流水,取代原配额探测
+		if h.scheduleGrokImportPipeline(created) {
+			result.GrokPipelineScheduled++
+		}
 		result.AccountCreated++
 	}
 
