@@ -146,6 +146,12 @@ func (h *GrokOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	}
 	tokenInfo, err := h.grokOAuthService.RefreshAccountToken(c.Request.Context(), account)
 	if err != nil {
+		// 定制:与 refreshSingleAccount 同规则,不可恢复失败置错停调度
+		if service.IsGrokRefreshPermanentFailure(err) {
+			if setErr := h.adminService.SetAccountError(c.Request.Context(), account.ID, "Grok token refresh failed: "+err.Error()); setErr != nil {
+				slog.Warn("grok_refresh_set_error_failed", "account_id", account.ID, "error", setErr)
+			}
+		}
 		response.ErrorFrom(c, err)
 		return
 	}

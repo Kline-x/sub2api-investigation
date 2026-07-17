@@ -1275,6 +1275,12 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 		tokenInfo, err := h.grokOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
+			// 定制:invalid_grant/上游4xx(非429)等不可恢复失败 → 置错停调度;网络/5xx 只返回错误
+			if service.IsGrokRefreshPermanentFailure(err) {
+				if setErr := h.adminService.SetAccountError(ctx, account.ID, "Grok token refresh failed: "+err.Error()); setErr != nil {
+					log.Printf("[WARN] Failed to set error for grok account %d after refresh failure: %v", account.ID, setErr)
+				}
+			}
 			return nil, "", fmt.Errorf("failed to refresh Grok credentials: %w", err)
 		}
 
