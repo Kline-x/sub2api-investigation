@@ -59,6 +59,10 @@
 | 4 段版本比较 + 自有更新源 | `update_service.go` |
 | 发布流水线定制 | `.goreleaser.simple.yaml` |
 | 自有仓库引用 | `VersionBadge.vue` 常量、`deploy/install.sh` `GITHUB_REPO` |
+| 账号批量测试端点（POST `/accounts/batch-test`，`models_by_platform` 按平台选模型） | `handler/admin/account_handler.go`（`BatchTest`）、`routes/admin.go`、前端 `AccountsView.vue` / `AccountBulkActionsBar.vue` / `BatchTestConfirmModal.vue` / `accounts.ts` |
+| grok 测试/刷新失败置错（4xx 非429→SetError） | `service/account_test_service.go`、`service/grok_refresh_failure.go`、`pkg/xai/errors.go`、`repository/grok_oauth_client.go`、`handler/admin/account_handler.go`、`grok_oauth_handler.go` |
+| CPA(xai-*.json)导入 | `handler/admin/account_data_xai.go`、`account_data.go`（`XaiAccounts`）、前端 `ImportDataModal.vue` / `utils/xaiImport.ts` |
+| 导入后刷新+测试流水（取代 probe；**合并上游须保留 importData 替换点**） | `handler/admin/grok_import_pipeline.go`、`account_data.go` |
 
 ## 已知问题
 
