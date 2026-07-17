@@ -1,7 +1,7 @@
 # 设计:批量测试 / 失败置错 / CPA 导入 / 导入后刷新+测试
 
 日期:2026-07-16
-状态:已确认(用户批准)
+状态:已确认(用户批准);2026-07-17 批测按平台选模型
 
 ## 背景与目标
 
@@ -19,6 +19,7 @@
 | 决策点 | 结论 |
 |---|---|
 | 批量测试实现方式 | 后端批量端点(非前端循环) |
+| 批量测试选模型 | **支持按平台选模型**:请求 `models_by_platform` 映射(如 `{"grok":"grok-4.5","openai":"gpt-5.4"}`);每个出现的平台各选一个。某平台未填则该平台账号走硬编码默认。跨平台勾选也可用 |
 | 「失败」界定 | 上游 4xx(非 429)算失败置 error;429 走限流态;5xx/网络异常不改状态 |
 | CPA 导入入口 | 现有「导入数据」弹窗自动识别格式 |
 | 导入后刷新+测试范围 | 所有 grok OAuth 账号导入(CPA 与 sub2api-data 均生效) |
@@ -40,10 +41,30 @@
 ### 1. 批量测试端点
 
 - 路由:`POST /admin/accounts/batch-test`(挂在 `admin.go` accounts 组,紧邻 batch-refresh)
-- 请求:`{ "account_ids": [1,2,3] }`
-- Handler(`account_handler.go` 新增 `BatchTest`):errgroup 并发 10,逐账号调 `RunTestBackground(ctx, id, "")`;model 传空 → grok 落默认 `grok-4.5`,其他平台用各自默认
+- 请求:
+  ```json
+  {
+    "account_ids": [1, 2, 3],
+    "models_by_platform": {
+      "grok": "grok-4.5",
+      "openai": "gpt-5.4",
+      "claude": "claude-sonnet-4-5-20250929"
+    }
+  }
+  ```
+  - `models_by_platform` **可选**;key=账号 `platform` 字符串(与后端 `PlatformGrok` 等一致:`grok`/`openai`/`claude`/`gemini`/`antigravity`…)
+  - 某平台 key 缺失或值为空 → 该平台账号传空 model,走 service 硬编码默认
+  - **兼容**(可选):若只传顶层 `model_id`(旧字段)且无 `models_by_platform`,则整批共用该 model(仅同平台场景有意义);有 `models_by_platform` 时忽略顶层 `model_id`
+- Handler(`account_handler.go` 新增 `BatchTest`):errgroup 并发 10;对每个账号 `modelID = models_by_platform[acc.Platform]`,再 `RunTestBackground(ctx, id, modelID)`
 - 响应:`{ total, success, failed, results: [{ id, name, status, error_message, latency_ms }] }`
 - 失败置错不在 handler 做,由第 2 条(service 层)统一生效
+- **前端(Task 9)**:批量操作栏「批量测试」→ 确认弹窗:
+  1. 展示勾选数量
+  2. 根据勾选账号 **按 platform 去重**,每个平台渲染一行模型下拉:
+     - 该平台任取一个账号调 `getAvailableModels` 填充选项
+     - 默认值:grok→`grok-4.5`;其他→列表首项(或空=后端默认,产品可选)
+     - 跨平台时同样显示多行,互不影响
+  3. 确认后组装 `models_by_platform` 调用 `batchTest(accountIds, modelsByPlatform)`
 
 ### 2. 测试失败置错(service 层,所有入口统一生效)
 
@@ -85,10 +106,14 @@
 - **取代**原 `scheduleGrokImportProbe` 调度(probe 代码保留不删,不再从导入路径调用)——测试成功路径已解析并持久化配额快照(`account_test_service.go:773-790`)
 - 导入接口立即返回;`DataImportResult` 增加提示字段(如 `background_tasks` 说明「N 个 grok 账号已进入后台刷新+测试」)
 
-### 6. grok-4.5 统一测试模型
+### 6. 测试模型规则
 
-- 后端零改动(默认已是 grok-4.5);批测/导入后测试传空 model 即命中
-- 验证前端 `AccountTestModal.vue` 对 grok 账号模型下拉默认选中 `grok-4.5`(`getAvailableModels` 返回的列表首项即是),若默认不是则修正默认选中逻辑
+- **单测弹窗**:用户选模型;验证 grok 下拉默认选中 `grok-4.5`,若不是则修正
+- **批量测试**:确认弹窗 **每个平台各选一个模型**(见 §1)
+  - 请求体 `models_by_platform[platform] → model_id`
+  - 某平台未选/空 → 该平台账号空 model → 硬编码默认(grok→`grok-4.5`,其他→`DefaultTestModel`)
+  - 跨平台勾选:弹窗展示多行下拉,不禁用
+- **导入后流水**(仅 grok):仍传空 model → `grok-4.5`,无需用户交互
 
 ## 错误处理汇总
 
