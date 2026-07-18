@@ -51,6 +51,8 @@ func TestGatewayEnsureForwardErrorResponse_AppendsSSEAfterWritten(t *testing.T) 
 	require.Equal(t, http.StatusTeapot, w.Code)
 	assert.Contains(t, w.Body.String(), "already written")
 	assert.Contains(t, w.Body.String(), `data: {"type":"error"`)
+	assert.Contains(t, w.Body.String(), `event: message_stop`)
+	assert.Contains(t, w.Body.String(), `"type":"message_stop"`)
 }
 
 // case B 回归：Anthropic-backed /responses，Writer 已被写过时

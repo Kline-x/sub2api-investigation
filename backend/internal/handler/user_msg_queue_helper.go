@@ -98,33 +98,57 @@ func (h *UserMsgQueueHelper) waitForLockWithPing(
 	}
 
 	var pingCh <-chan time.Time
+	var pingTicker *time.Ticker
+	var firstPingCh <-chan time.Time
 	if needPing {
-		pingTicker := time.NewTicker(h.pingInterval)
-		defer pingTicker.Stop()
-		pingCh = pingTicker.C
+		grace := sseFirstPingGrace
+		if h.pingInterval > 0 && h.pingInterval < grace {
+			grace = h.pingInterval
+		}
+		firstPingTimer := time.NewTimer(grace)
+		defer firstPingTimer.Stop()
+		firstPingCh = firstPingTimer.C
 	}
 
 	backoff := initialBackoff
 	timer := time.NewTimer(backoff)
 	defer timer.Stop()
 
+	sendPing := func() error {
+		if !*streamStarted {
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.Header("X-Accel-Buffering", "no")
+			*streamStarted = true
+		}
+		if _, err := fmt.Fprint(c.Writer, string(h.pingFormat)); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("umq wait timeout for account %d", accountID)
 
-		case <-pingCh:
-			if !*streamStarted {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.Header("X-Accel-Buffering", "no")
-				*streamStarted = true
-			}
-			if _, err := fmt.Fprint(c.Writer, string(h.pingFormat)); err != nil {
+		case <-firstPingCh:
+			if err := sendPing(); err != nil {
 				return nil, err
 			}
-			flusher.Flush()
+			firstPingCh = nil
+			if pingTicker == nil {
+				pingTicker = time.NewTicker(h.pingInterval)
+				defer pingTicker.Stop()
+				pingCh = pingTicker.C
+			}
+
+		case <-pingCh:
+			if err := sendPing(); err != nil {
+				return nil, err
+			}
 
 		case <-timer.C:
 			result, err := h.queueService.TryAcquire(ctx, accountID)
@@ -204,32 +228,59 @@ func (h *UserMsgQueueHelper) ThrottleWithPing(
 	}
 
 	var pingCh <-chan time.Time
+	var pingTicker *time.Ticker
+	var firstPingCh <-chan time.Time
 	if needPing {
-		pingTicker := time.NewTicker(h.pingInterval)
-		defer pingTicker.Stop()
-		pingCh = pingTicker.C
+		grace := sseFirstPingGrace
+		if h.pingInterval > 0 && h.pingInterval < grace {
+			grace = h.pingInterval
+		}
+		// 若延迟本身短于 grace，整个 delay 期间不发 ping，避免仅为短节流固化 200
+		if delay > grace {
+			firstPingTimer := time.NewTimer(grace)
+			defer firstPingTimer.Stop()
+			firstPingCh = firstPingTimer.C
+		}
 	}
 
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
+	sendPing := func() error {
+		if !*streamStarted {
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.Header("X-Accel-Buffering", "no")
+			*streamStarted = true
+		}
+		if _, err := fmt.Fprint(c.Writer, string(h.pingFormat)); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-pingCh:
-			// SSE ping 逻辑（与 waitForLockWithPing 一致）
-			if !*streamStarted {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.Header("X-Accel-Buffering", "no")
-				*streamStarted = true
-			}
-			if _, err := fmt.Fprint(c.Writer, string(h.pingFormat)); err != nil {
+		case <-firstPingCh:
+			if err := sendPing(); err != nil {
 				return err
 			}
-			flusher.Flush()
+			firstPingCh = nil
+			if pingTicker == nil {
+				pingTicker = time.NewTicker(h.pingInterval)
+				defer pingTicker.Stop()
+				pingCh = pingTicker.C
+			}
+		case <-pingCh:
+			if err := sendPing(); err != nil {
+				return err
+			}
 		case <-timer.C:
 			return nil
 		}

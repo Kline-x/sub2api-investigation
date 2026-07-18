@@ -1511,16 +1511,18 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 	}
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
 	if reentered {
-		r.recordTempUnschedReentry(ctx, id)
+		r.recordTempUnschedReentry(ctx, id, reason)
 	}
 	return true, nil
 }
 
 // recordTempUnschedReentry 在真正重新进入 temp 时递增计数；达阈值则自动 SetError(定制)。
-func (r *accountRepository) recordTempUnschedReentry(ctx context.Context, id int64) {
+func (r *accountRepository) recordTempUnschedReentry(ctx context.Context, id int64, reason string) {
 	if r == nil || r.tempUnschedEntryCounter == nil || id <= 0 {
 		return
 	}
+	// reason 参数保留供调用方传入;当前策略对所有 re-entry 统一计数。
+	_ = reason
 	count, err := r.tempUnschedEntryCounter.IncrementTempUnschedEntryCount(ctx, id)
 	if err != nil {
 		logger.LegacyPrintf("repository.account", "[TempUnschedEntry] increment failed: account=%d err=%v", id, err)
@@ -2216,7 +2218,7 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 	}
 	r.syncSchedulerAccountSnapshot(ctx, id)
 	if reentered {
-		r.recordTempUnschedReentry(ctx, id)
+		r.recordTempUnschedReentry(ctx, id, reason)
 	}
 	return nil
 }
@@ -2264,7 +2266,7 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 	}
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
 	// WHERE 已要求 temp 为空或已过期 → 成功 apply 即为 re-entry。
-	r.recordTempUnschedReentry(ctx, id)
+	r.recordTempUnschedReentry(ctx, id, reason)
 	return true, nil
 }
 

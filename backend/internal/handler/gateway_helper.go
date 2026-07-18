@@ -95,6 +95,11 @@ const (
 	maxConcurrencyWait = 30 * time.Second
 	// defaultPingInterval 流式响应等待时发送 ping 的默认间隔
 	defaultPingInterval = 10 * time.Second
+	// sseFirstPingGrace 等槽位时推迟首个 SSE ping 的宽限期。
+	// 在此之前不 flush 响应，避免短等待也把 HTTP 200 固化；
+	// 否则后续失败只能写 SSE 错误，Claude Code 等客户端会报
+	// "empty or malformed response (HTTP 200)"。
+	sseFirstPingGrace = 5 * time.Second
 	// initialBackoff 初始退避时间
 	initialBackoff = 100 * time.Millisecond
 	// backoffMultiplier 退避时间乘数（指数退避）
@@ -364,17 +369,38 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 		}
 	}
 
-	// Only create ping ticker if ping is needed
+	// 等槽位：超过 grace 后才发首个 SSE ping，避免短等待固化 HTTP 200。
 	var pingCh <-chan time.Time
+	var pingTicker *time.Ticker
+	var firstPingCh <-chan time.Time
 	if needPing {
-		pingTicker := time.NewTicker(h.pingInterval)
-		defer pingTicker.Stop()
-		pingCh = pingTicker.C
+		grace := sseFirstPingGrace
+		if h.pingInterval > 0 && h.pingInterval < grace {
+			grace = h.pingInterval
+		}
+		firstPingTimer := time.NewTimer(grace)
+		defer firstPingTimer.Stop()
+		firstPingCh = firstPingTimer.C
 	}
 
 	backoff := initialBackoff
 	timer := time.NewTimer(backoff)
 	defer timer.Stop()
+
+	sendPing := func() error {
+		if !*streamStarted {
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.Header("X-Accel-Buffering", "no")
+			*streamStarted = true
+		}
+		if _, err := fmt.Fprint(c.Writer, string(h.pingFormat)); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
 
 	for {
 		select {
@@ -387,19 +413,23 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 				IsTimeout: true,
 			}
 
-		case <-pingCh:
-			// Send ping to keep connection alive
-			if !*streamStarted {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.Header("X-Accel-Buffering", "no")
-				*streamStarted = true
-			}
-			if _, err := fmt.Fprint(c.Writer, string(h.pingFormat)); err != nil {
+		case <-firstPingCh:
+			// grace 到期：首个 ping 固化 200，之后按 pingInterval 心跳
+			if err := sendPing(); err != nil {
 				return nil, err
 			}
-			flusher.Flush()
+			firstPingCh = nil
+			if pingTicker == nil {
+				pingTicker = time.NewTicker(h.pingInterval)
+				defer pingTicker.Stop()
+				pingCh = pingTicker.C
+			}
+
+		case <-pingCh:
+			// Send ping to keep connection alive
+			if err := sendPing(); err != nil {
+				return nil, err
+			}
 
 		case <-timer.C:
 			// Try to acquire slot

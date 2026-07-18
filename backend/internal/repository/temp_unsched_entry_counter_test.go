@@ -54,14 +54,14 @@ func TestAccountRepository_RecordTempUnschedReentry_EscalatesToErrorAtThreshold(
 
 	// 1st / 2nd re-entry: only increment
 	for i := 1; i <= 2; i++ {
-		repo.recordTempUnschedReentry(context.Background(), 42)
+		repo.recordTempUnschedReentry(context.Background(), 42, "runtime failure")
 		require.Equal(t, i, counter.incrCalls)
 		require.Equal(t, 0, counter.resetCalls)
 		require.Equal(t, 0, setErrorCalls)
 	}
 
 	// 3rd re-entry: SetError + ClearTemp + Reset
-	repo.recordTempUnschedReentry(context.Background(), 42)
+	repo.recordTempUnschedReentry(context.Background(), 42, "runtime failure")
 	require.Equal(t, 3, counter.incrCalls)
 	require.Equal(t, 1, setErrorCalls)
 	require.Equal(t, "temporary unschedulable entered 3 times", lastErrorMsg)
@@ -79,7 +79,7 @@ func TestAccountRepository_RecordTempUnschedReentry_NilCounterIsNoop(t *testing.
 	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
 	repo := newAccountRepositoryWithSQL(nil, exec, nil)
 
-	repo.recordTempUnschedReentry(context.Background(), 42)
+	repo.recordTempUnschedReentry(context.Background(), 42, "runtime failure")
 	require.Empty(t, exec.execQueries)
 }
 
@@ -89,7 +89,7 @@ func TestAccountRepository_RecordTempUnschedReentry_IncrementErrorIsNoop(t *test
 	repo := newAccountRepositoryWithSQL(nil, exec, nil)
 	repo.tempUnschedEntryCounter = counter
 
-	repo.recordTempUnschedReentry(context.Background(), 42)
+	repo.recordTempUnschedReentry(context.Background(), 42, "runtime failure")
 	require.Equal(t, 1, counter.incrCalls)
 	require.Equal(t, 0, counter.resetCalls)
 	require.Empty(t, exec.execQueries)

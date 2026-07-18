@@ -500,3 +500,40 @@ type helperConcurrencyCacheStubWithError struct {
 func (s *helperConcurrencyCacheStubWithError) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
 	return false, s.err
 }
+
+func TestWaitForSlotWithPingTimeout_FirstPingGraceSkipsShortWait(t *testing.T) {
+	// 短于 grace 的等待不应固化 HTTP 200 / 发送 SSE ping。
+	// tryImmediate 第一次就成功，总耗时远小于 sseFirstPingGrace。
+	cache := &helperConcurrencyCacheStub{
+		accountSeq: []bool{true},
+	}
+	concurrency := service.NewConcurrencyService(cache)
+	helper := NewConcurrencyHelper(concurrency, SSEPingFormatClaude, defaultPingInterval)
+	c, rec := newHelperTestContext(http.MethodPost, "/v1/messages")
+	streamStarted := false
+
+	release, err := helper.waitForSlotWithPingTimeout(c, "account", 101, 2, time.Second, true, &streamStarted, true)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	release()
+	require.False(t, streamStarted, "short wait must not start stream/ping")
+	require.Empty(t, rec.Body.String())
+}
+
+func TestWaitForSlotWithPingTimeout_FirstPingAfterGrace(t *testing.T) {
+	cache := &helperConcurrencyCacheStub{
+		accountSeq: []bool{false, false, false, false, false, false, false, false},
+	}
+	concurrency := service.NewConcurrencyService(cache)
+	// 用较短 interval，grace=min(5s, 20ms)=20ms，timeout 足够看到首个 ping
+	helper := NewConcurrencyHelper(concurrency, SSEPingFormatClaude, 20*time.Millisecond)
+	c, rec := newHelperTestContext(http.MethodPost, "/v1/messages")
+	streamStarted := false
+
+	release, err := helper.waitForSlotWithPingTimeout(c, "account", 101, 2, 80*time.Millisecond, true, &streamStarted, true)
+	require.Nil(t, release)
+	var cErr *ConcurrencyError
+	require.ErrorAs(t, err, &cErr)
+	require.True(t, streamStarted)
+	require.Contains(t, rec.Body.String(), `"type": "ping"`)
+}

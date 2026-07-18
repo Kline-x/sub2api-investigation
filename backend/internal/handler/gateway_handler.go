@@ -1718,13 +1718,19 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 				return
 			}
 		}
-		// Stream already started, send error as SSE event then close
+		// Stream already started, send error as SSE event then close.
+		// Claude/Anthropic 流除 error 帧外再补 message_stop，避免客户端只看到
+		// 半截流/空内容而报 "empty or malformed response (HTTP 200)"。
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
 			// SSE 错误事件固定 schema，使用 Quote 直拼可避免额外 Marshal 分配。
 			errorEvent := `data: {"type":"error","error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(message) + `}}` + "\n\n"
 			if _, err := fmt.Fprint(c.Writer, errorEvent); err != nil {
 				_ = c.Error(err)
+			} else {
+				// 协议级终止帧：仅 Anthropic messages SSE 路径需要；
+				// /v1/responses 已在上方走 response.failed 分支返回。
+				_, _ = fmt.Fprint(c.Writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 			}
 			flusher.Flush()
 		}

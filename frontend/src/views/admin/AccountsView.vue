@@ -513,7 +513,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch, nextTick } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -975,6 +975,8 @@ const runWithBulkBusy = async (label: string, action: () => Promise<void>) => {
   if (bulkActionBusy.value) return
   bulkActionBusy.value = true
   bulkActionBusyLabel.value = label
+  // 先让 busy/disabled 状态刷到 DOM，再发请求；否则短请求可能看起来像“没 loading”
+  await nextTick()
   try {
     await action()
   } finally {

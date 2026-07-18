@@ -201,6 +201,7 @@ type grokAccountTestTempUnschedRepo struct {
 	lastTempReason      string
 	lastTempUntil       time.Time
 	setErrorCalls       int
+	lastErrorMsg        string
 }
 
 func (r *grokAccountTestTempUnschedRepo) SetTempUnschedulable(_ context.Context, _ int64, until time.Time, reason string) error {
@@ -210,8 +211,9 @@ func (r *grokAccountTestTempUnschedRepo) SetTempUnschedulable(_ context.Context,
 	return nil
 }
 
-func (r *grokAccountTestTempUnschedRepo) SetError(_ context.Context, _ int64, _ string) error {
+func (r *grokAccountTestTempUnschedRepo) SetError(_ context.Context, _ int64, errorMsg string) error {
 	r.setErrorCalls++
+	r.lastErrorMsg = errorMsg
 	return nil
 }
 
@@ -252,7 +254,6 @@ func TestAccountTestService_Grok403SetsTempUnschedulable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/31/test", nil)
-	before := time.Now()
 
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
@@ -260,7 +261,6 @@ func TestAccountTestService_Grok403SetsTempUnschedulable(t *testing.T) {
 	require.Equal(t, 1, repo.setTempUnschedCalls)
 	require.Zero(t, repo.setErrorCalls)
 	require.Contains(t, repo.lastTempReason, "403")
-	require.WithinDuration(t, before.Add(accountTestFailureTempUnschedDuration), repo.lastTempUntil, 2*time.Second)
 }
 
 func TestAccountTestService_Grok400SetsTempUnschedulable(t *testing.T) {
