@@ -1237,6 +1237,8 @@ export interface AdminDataPayload {
   exported_at: string
   proxies: AdminDataProxy[]
   accounts: AdminDataAccount[]
+  // CPA(xai-*.json)原始账号,后端 convertXaiAccount 转换(定制)
+  xai_accounts?: Record<string, unknown>[]
   // 导出时被排除的 spark 影子账号数量(影子不持凭据、其调度配置不在备份范围)。
   skipped_shadows?: number
 }
@@ -1280,6 +1282,8 @@ export interface AdminDataImportResult {
   proxy_failed: number
   account_created: number
   account_failed: number
+  // 进入后台刷新+测试流水的 grok 账号数(定制)
+  grok_pipeline_scheduled?: number
   errors?: AdminDataImportError[]
 }
 

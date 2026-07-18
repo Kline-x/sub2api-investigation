@@ -38,6 +38,38 @@ const (
 	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
 )
 
+// accountTestFailureTempUnschedDuration 测试失败后的临时不可调度时长。
+// 与后台 refresh 重试耗尽冷却一致:先踢出调度,到期自动恢复;需要永久停用时由管理员手动置错。
+const accountTestFailureTempUnschedDuration = tokenRefreshTempUnschedDuration
+
+// markAccountTempUnschedOnTestHTTPFailure 测试连接遇到上游错误响应时的状态规则(定制):
+// 429 只走限流、不置 error/temp;其他 HTTP 错误响应(400/401/403/502 等 4xx/5xx)
+// 统一临时不可调度。永久 error 需管理员手动「设为错误」。网络错误(无 StatusCode)由调用方决定。
+func (s *AccountTestService) markAccountTempUnschedOnTestHTTPFailure(ctx context.Context, accountID int64, statusCode int, errMsg string) {
+	if s == nil || s.accountRepo == nil {
+		return
+	}
+	if statusCode < 400 || statusCode == http.StatusTooManyRequests {
+		return
+	}
+	until := time.Now().Add(accountTestFailureTempUnschedDuration)
+	reason := fmt.Sprintf("account test failed: %s", errMsg)
+	_ = s.accountRepo.SetTempUnschedulable(ctx, accountID, until, reason)
+}
+
+// markAccountTempUnschedOnTestFailure 测试路径非 HTTP 状态类失败(如取 token 失败)的临时不可调度。
+func (s *AccountTestService) markAccountTempUnschedOnTestFailure(ctx context.Context, accountID int64, errMsg string) {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return
+	}
+	msg := strings.TrimSpace(errMsg)
+	if msg == "" {
+		return
+	}
+	until := time.Now().Add(accountTestFailureTempUnschedDuration)
+	_ = s.accountRepo.SetTempUnschedulable(ctx, accountID, until, "account test failed: "+msg)
+}
+
 // TestEvent represents a SSE event for account testing
 type TestEvent struct {
 	Type     string `json:"type"`
@@ -316,12 +348,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
-
-		// 403 表示账号被上游封禁，标记为 error 状态
-		if resp.StatusCode == http.StatusForbidden {
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
-		}
-
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
 		return s.sendErrorAndEnd(c, errMsg)
 	}
 
@@ -388,9 +415,7 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == http.StatusForbidden {
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
-		}
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
 		return s.sendErrorAndEnd(c, errMsg)
 	}
 
@@ -474,7 +499,9 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	// Bedrock non-streaming response is standard Claude JSON, extract the text
@@ -676,12 +703,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
-		// 401 Unauthorized: 标记账号为永久错误
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
-			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
-		}
-		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	// Process SSE stream
@@ -711,9 +735,12 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 			return s.sendErrorAndEnd(c, "Grok token provider not configured")
 		}
 		var err error
-		authToken, err = s.grokTokenProvider.GetAccessToken(ctx, account)
+		authToken, err = s.grokTokenProvider.GetAccessToken(withAccountConnectionTestPath(ctx), account)
 		if err != nil {
-			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to get Grok access token: %s", err.Error()))
+			errMsg := fmt.Sprintf("Failed to get Grok access token: %s", err.Error())
+			// 定制:取 token 失败也视为测试失败 → 临时不可调度(非永久 error)
+			s.markAccountTempUnschedOnTestFailure(ctx, account.ID, errMsg)
+			return s.sendErrorAndEnd(c, errMsg)
 		}
 	case AccountTypeAPIKey:
 		authToken = strings.TrimSpace(account.GetCredential("api_key"))
@@ -791,7 +818,10 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body))
+		// 定制:除 429 限流外,400/403/502 等错误响应统一置错停调度;网络错误不改状态
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	return s.processOpenAIStream(c, resp.Body)
@@ -850,11 +880,9 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
-			errMsg := fmt.Sprintf("Chat Completions authentication failed (401): %s", string(body))
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
-		}
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Chat Completions API (/v1/chat/completions) returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("Chat Completions API (/v1/chat/completions) returned %d: %s", resp.StatusCode, string(body))
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	return s.processOpenAIChatCompletionsStream(c, resp.Body)
@@ -996,11 +1024,9 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
-			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
-		}
-		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	s.sendEvent(c, TestEvent{Type: "content", Text: "Compact probe succeeded"})
@@ -1109,7 +1135,9 @@ func (s *AccountTestService) testGeminiAccountConnection(c *gin.Context, account
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	// Process SSE stream
@@ -1733,7 +1761,9 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
 	// Parse {"data": [{"b64_json": "...", "revised_prompt": "..."}]}
@@ -1860,6 +1890,8 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		if message == "" {
 			message = fmt.Sprintf("Responses API returned %d", resp.StatusCode)
 		}
+		errMsg := fmt.Sprintf("%s (status %d)", message, resp.StatusCode)
+		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
 		return s.sendErrorAndEnd(c, message)
 	}
 

@@ -180,7 +180,9 @@
           :selecting-all="selectingAllFiltered"
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
+          @set-error="handleBulkSetError"
           @refresh-token="handleBulkRefreshToken"
+          @test="handleBulkTest"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -404,7 +406,14 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <BatchTestConfirmModal
+      :show="showBatchTestModal"
+      :accounts="batchTestAccounts"
+      :account-ids="selIds"
+      @close="showBatchTestModal = false"
+      @confirm="runBulkTest"
+    />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @set-error="handleSetError" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -452,6 +461,7 @@ import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrs
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
+import BatchTestConfirmModal from '@/components/admin/account/BatchTestConfirmModal.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
@@ -875,6 +885,28 @@ const allFilteredSelected = computed(() => (
   pagination.total > 0 && selIds.value.length === pagination.total
 ))
 
+// 跨页勾选时 listIDs 只回 id,需要额外缓存 platform 供批量测试按平台选模型
+const selectedAccountMeta = ref<Map<number, { platform: string; type?: string }>>(new Map())
+
+const rememberSelectedAccountMeta = (rows: Array<{ id: number; platform: string; type?: string }>) => {
+  if (rows.length === 0) return
+  const next = new Map(selectedAccountMeta.value)
+  for (const row of rows) {
+    if (!row?.id) continue
+    next.set(row.id, { platform: row.platform, type: row.type })
+  }
+  selectedAccountMeta.value = next
+}
+
+const pruneSelectedAccountMeta = (ids: number[]) => {
+  const idSet = new Set(ids)
+  const next = new Map<number, { platform: string; type?: string }>()
+  for (const [id, meta] of selectedAccountMeta.value) {
+    if (idSet.has(id)) next.set(id, meta)
+  }
+  selectedAccountMeta.value = next
+}
+
 const currentAccountFilters = () => ({
   platform: params.platform,
   type: params.type,
@@ -890,12 +922,46 @@ const selectAllFiltered = async () => {
   try {
     const result = await adminAPI.accounts.listIDs(currentAccountFilters())
     setSelectedIds(result.ids)
+    pruneSelectedAccountMeta(result.ids)
+
+    // 有平台筛选时,全选结果平台已知;否则抽样当前筛选列表补齐 platform 元数据
+    if (params.platform) {
+      rememberSelectedAccountMeta(
+        result.ids.map((id) => ({ id, platform: params.platform, type: params.type || undefined }))
+      )
+    } else if (result.ids.length > 0) {
+      try {
+        const preview = await adminAPI.accounts.list(1, Math.min(100, result.ids.length), currentAccountFilters())
+        const idSet = new Set(result.ids)
+        rememberSelectedAccountMeta(
+          (preview.items || [])
+            .filter((account) => idSet.has(account.id))
+            .map((account) => ({ id: account.id, platform: account.platform, type: account.type }))
+        )
+      } catch (metaError) {
+        console.error('Failed to hydrate selected account platforms:', metaError)
+      }
+    }
   } catch (error: any) {
     appStore.showError(error?.message || t('admin.accounts.bulkActions.selectAllFailed'))
   } finally {
     selectingAllFiltered.value = false
   }
 }
+
+// 当前页账号变化/勾选变化时,同步可见账号的 platform 缓存
+watch(
+  [accounts, selIds],
+  () => {
+    pruneSelectedAccountMeta(selIds.value)
+    rememberSelectedAccountMeta(
+      accounts.value
+        .filter((account) => selIds.value.includes(account.id))
+        .map((account) => ({ id: account.id, platform: account.platform, type: account.type }))
+    )
+  },
+  { deep: true }
+)
 
 const swipeVirtualContext: SwipeSelectVirtualContext = {
   getVirtualizer: () => dataTableRef.value?.virtualizer ?? null,
@@ -1409,6 +1475,92 @@ const handleBulkResetStatus = async () => {
     appStore.showError(String(error))
   }
 }
+
+const handleBulkSetError = async () => {
+  if (selIds.value.length === 0) return
+  if (!confirm(t('admin.accounts.bulkActions.setErrorConfirm', { count: selIds.value.length }))) return
+  try {
+    const result = await adminAPI.accounts.batchSetError(selIds.value)
+    if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.bulkActions.setErrorSuccess', { count: result.success }))
+      clearSelection()
+    }
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk set error:', error)
+    appStore.showError(String(error))
+  }
+}
+
+const showBatchTestModal = ref(false)
+const batchTestAccounts = computed(() => {
+  const fromPage = new Map(
+    accounts.value.map((account) => [account.id, account.platform] as const)
+  )
+  return selIds.value.map((id) => {
+    const platform =
+      fromPage.get(id) ||
+      selectedAccountMeta.value.get(id)?.platform ||
+      params.platform ||
+      'unknown'
+    return { id, platform }
+  })
+})
+
+const ensureBatchTestPlatformMeta = async () => {
+  const missing = selIds.value.filter((id) => {
+    if (accounts.value.some((account) => account.id === id)) return false
+    return !selectedAccountMeta.value.has(id)
+  })
+  if (missing.length === 0) return
+  if (params.platform) {
+    rememberSelectedAccountMeta(
+      missing.map((id) => ({ id, platform: params.platform, type: params.type || undefined }))
+    )
+    return
+  }
+  try {
+    const preview = await adminAPI.accounts.list(1, Math.min(100, selIds.value.length), currentAccountFilters())
+    const idSet = new Set(selIds.value)
+    rememberSelectedAccountMeta(
+      (preview.items || [])
+        .filter((account) => idSet.has(account.id))
+        .map((account) => ({ id: account.id, platform: account.platform, type: account.type }))
+    )
+  } catch (error) {
+    console.error('Failed to ensure batch test platforms:', error)
+  }
+}
+
+const handleBulkTest = async () => {
+  if (selIds.value.length === 0) return
+  await ensureBatchTestPlatformMeta()
+  showBatchTestModal.value = true
+}
+
+const runBulkTest = async (modelsByPlatform: Record<string, string>) => {
+  showBatchTestModal.value = false
+  try {
+    const result = await adminAPI.accounts.batchTest(selIds.value, modelsByPlatform)
+    if (result.failed > 0) {
+      appStore.showError(
+        t('admin.accounts.bulkActions.testCompletedWithFailures', {
+          success: result.success,
+          failed: result.failed
+        })
+      )
+    } else {
+      appStore.showSuccess(t('admin.accounts.bulkActions.testSuccess', { count: result.success }))
+      clearSelection()
+    }
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk test accounts:', error)
+    appStore.showError(String(error))
+  }
+}
 const handleBulkRefreshToken = async () => {
   if (!confirm(t('common.confirm'))) return
   try {
@@ -1780,6 +1932,18 @@ const handleRecoverState = async (a: Account) => {
   } catch (error: any) {
     console.error('Failed to recover account state:', error)
     appStore.showError(error?.message || t('admin.accounts.recoverStateFailed'))
+  }
+}
+const handleSetError = async (a: Account) => {
+  if (!confirm(t('admin.accounts.setErrorConfirm', { name: a.name }))) return
+  try {
+    const updated = await adminAPI.accounts.setError(a.id)
+    patchAccountInList(updated)
+    enterAutoRefreshSilentWindow()
+    appStore.showSuccess(t('admin.accounts.setErrorSuccess'))
+  } catch (error: any) {
+    console.error('Failed to set account error:', error)
+    appStore.showError(error?.message || t('admin.accounts.setErrorFailed'))
   }
 }
 const handleResetQuota = async (a: Account) => {

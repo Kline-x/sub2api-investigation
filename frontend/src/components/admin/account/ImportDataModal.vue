@@ -102,6 +102,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import type { AdminDataImportResult, AdminDataPayload } from '@/types'
+import { extractXaiAccounts } from '@/utils/xaiImport'
 
 interface Props {
   show: boolean
@@ -259,6 +260,7 @@ const mergeDataPayloads = (payloads: AdminDataPayload[]): AdminDataPayload => {
     exported_at: new Date().toISOString(),
     proxies: payloads.flatMap((item) => item.proxies),
     accounts: payloads.flatMap((item) => item.accounts),
+    xai_accounts: payloads.flatMap((item) => item.xai_accounts || []),
     skipped_shadows: payloads.reduce((sum, item) => {
       const count = Number(item.skipped_shadows || 0)
       return Number.isFinite(count) ? sum + count : sum
@@ -285,11 +287,25 @@ const handleImport = async () => {
         )
         return
       }
-      if (!isValidDataPayload(parsed)) {
-        appStore.showError(t('admin.accounts.dataImportInvalidFile', { name: sourceFile.name }))
-        return
+      if (isValidDataPayload(parsed)) {
+        dataPayloads.push(parsed)
+        continue
       }
-      dataPayloads.push(parsed)
+      // CPA(xai-*.json)格式:检测后包装成带 xai_accounts 的 payload,由后端转换(定制)
+      const xaiAccounts = extractXaiAccounts(parsed)
+      if (xaiAccounts) {
+        dataPayloads.push({
+          type: 'sub2api-data',
+          version: 1,
+          exported_at: new Date().toISOString(),
+          proxies: [],
+          accounts: [],
+          xai_accounts: xaiAccounts
+        })
+        continue
+      }
+      appStore.showError(t('admin.accounts.dataImportInvalidFile', { name: sourceFile.name }))
+      return
     }
     const dataPayload = mergeDataPayloads(dataPayloads)
 
@@ -306,6 +322,11 @@ const handleImport = async () => {
       proxy_created: res.proxy_created,
       proxy_reused: res.proxy_reused,
       proxy_failed: res.proxy_failed,
+    }
+    if ((res.grok_pipeline_scheduled || 0) > 0) {
+      appStore.showInfo(
+        t('admin.accounts.dataImportPipelineScheduled', { count: res.grok_pipeline_scheduled })
+      )
     }
     if (res.account_failed > 0 || res.proxy_failed > 0) {
       // 部分成功也创建了数据;弹窗关闭时通过 imported 通知父组件刷新列表

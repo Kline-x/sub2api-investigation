@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -118,4 +119,21 @@ func TestGrokOAuthEntitlementDenialRequiresExplicitEvidence(t *testing.T) {
 	require.True(t, grokOAuthHasExplicitEntitlementDenial(`{"message":"no active Grok subscription"}`))
 	require.False(t, grokOAuthHasExplicitEntitlementDenial(`{"error":"forbidden","message":"request forbidden"}`))
 	require.False(t, grokOAuthHasExplicitEntitlementDenial(`<html>403 Forbidden</html>`))
+}
+
+func TestGrokOAuthClientStatusErrorCarriesUpstreamStatusCause(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+	}))
+	defer server.Close()
+	t.Setenv(xai.EnvTokenURL, server.URL)
+
+	client := NewGrokOAuthClient()
+	_, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id")
+	require.Error(t, err)
+
+	var upstream *xai.OAuthUpstreamStatusError
+	require.True(t, errors.As(err, &upstream))
+	require.Equal(t, http.StatusBadRequest, upstream.Status)
 }

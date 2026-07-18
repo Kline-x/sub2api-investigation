@@ -759,6 +759,31 @@ export async function batchClearError(accountIds: number[]): Promise<BatchOperat
 }
 
 /**
+ * 手动将账号标记为错误状态(定制)。
+ * 测试失败默认只做临时不可调度,需要永久停用时由管理员确认后调用。
+ */
+export async function setError(id: number, errorMessage?: string): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/set-error`, {
+    error_message: errorMessage || undefined
+  })
+  return data
+}
+
+/**
+ * 批量手动标记为错误状态(定制)。
+ */
+export async function batchSetError(
+  accountIds: number[],
+  errorMessage?: string
+): Promise<BatchOperationResult> {
+  const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-set-error', {
+    account_ids: accountIds,
+    error_message: errorMessage || undefined
+  })
+  return data
+}
+
+/**
  * Batch refresh account credentials
  * @param accountIds - Array of account IDs
  * @returns Batch operation result
@@ -777,6 +802,44 @@ export async function batchRefresh(accountIds: number[]): Promise<BatchOperation
  * @param id - Account ID
  * @returns Updated account
  */
+
+export interface BatchTestResultItem {
+  id: number
+  name: string
+  status: 'success' | 'failed'
+  error_message?: string
+  latency_ms: number
+}
+
+export interface BatchTestResult {
+  total: number
+  success: number
+  failed: number
+  results: BatchTestResultItem[]
+}
+
+/**
+ * 批量测试账号连通性(定制)。
+ * modelsByPlatform 可选: platform → model_id;某平台缺省则后端用该平台默认。
+ */
+export async function batchTest(
+  accountIds: number[],
+  modelsByPlatform?: Record<string, string>
+): Promise<BatchTestResult> {
+  const body: {
+    account_ids: number[]
+    models_by_platform?: Record<string, string>
+  } = {
+    account_ids: accountIds,
+  }
+  if (modelsByPlatform && Object.keys(modelsByPlatform).length > 0) {
+    body.models_by_platform = modelsByPlatform
+  }
+  const { data } = await apiClient.post<BatchTestResult>('/admin/accounts/batch-test', body, {
+    timeout: 300000 // 批量逐账号实测,大批量耗时长
+  })
+  return data
+}
 export async function setPrivacy(id: number): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/set-privacy`)
   return data
@@ -885,6 +948,7 @@ export const accountsAPI = {
   applyOAuthCredentials,
   getStats,
   clearError,
+  setError,
   getUsage,
   getTodayStats,
   getBatchTodayStats,
@@ -911,7 +975,9 @@ export const accountsAPI = {
   createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,
   batchClearError,
+  batchSetError,
   batchRefresh,
+  batchTest,
   setPrivacy,
   revertProxyFallback,
   queryOpenAIQuota,

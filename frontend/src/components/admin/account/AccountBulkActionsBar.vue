@@ -42,6 +42,8 @@
       <template v-if="selectedIds.length > 0">
         <button class="btn btn-danger btn-sm" @click="$emit('delete')">{{ t('admin.accounts.bulkActions.delete') }}</button>
         <button class="btn btn-secondary btn-sm" @click="$emit('reset-status')">{{ t('admin.accounts.bulkActions.resetStatus') }}</button>
+        <button class="btn btn-secondary btn-sm" @click="$emit('set-error')">{{ t('admin.accounts.bulkActions.setError') }}</button>
+        <button class="btn btn-secondary btn-sm" @click="$emit('test')">{{ t('admin.accounts.bulkActions.test') }}</button>
         <button class="btn btn-secondary btn-sm" @click="$emit('refresh-token')">{{ t('admin.accounts.bulkActions.refreshToken') }}</button>
         <button class="btn btn-success btn-sm" @click="$emit('toggle-schedulable', true)">{{ t('admin.accounts.bulkActions.enableScheduling') }}</button>
         <button class="btn btn-warning btn-sm" @click="$emit('toggle-schedulable', false)">{{ t('admin.accounts.bulkActions.disableScheduling') }}</button>
@@ -64,6 +66,6 @@ defineProps<{
   allFilteredSelected: boolean
   selectingAll: boolean
 }>()
-defineEmits(['delete', 'edit-selected', 'edit-filtered', 'clear', 'select-page', 'select-filtered', 'toggle-schedulable', 'reset-status', 'refresh-token'])
+defineEmits(['delete', 'edit-selected', 'edit-filtered', 'clear', 'select-page', 'select-filtered', 'toggle-schedulable', 'reset-status', 'set-error', 'refresh-token', 'test'])
 const { t } = useI18n()
 </script>

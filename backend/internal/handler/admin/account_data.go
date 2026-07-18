@@ -30,6 +30,9 @@ type DataPayload struct {
 	ExportedAt string        `json:"exported_at"`
 	Proxies    []DataProxy   `json:"proxies"`
 	Accounts   []DataAccount `json:"accounts"`
+	// XaiAccounts 是 CPA(xai-*.json)导入的原始账号对象,由前端检测格式后透传,
+	// 服务端在 importData 中转换成 DataAccount(定制)
+	XaiAccounts []map[string]any `json:"xai_accounts,omitempty"`
 	// SkippedShadows 记录导出时被排除的 spark 影子账号数量(见 ExportData)。仅作可见性提示,
 	// 导入侧忽略该字段;omitempty 保持向后兼容。
 	SkippedShadows int `json:"skipped_shadows,omitempty"`
@@ -83,7 +86,9 @@ type DataImportResult struct {
 	ProxyFailed    int               `json:"proxy_failed"`
 	AccountCreated int               `json:"account_created"`
 	AccountFailed  int               `json:"account_failed"`
-	Errors         []DataImportError `json:"errors,omitempty"`
+	// GrokPipelineScheduled 本次导入进入「后台刷新+测试」流水的 grok 账号数(定制)
+	GrokPipelineScheduled int               `json:"grok_pipeline_scheduled,omitempty"`
+	Errors                []DataImportError `json:"errors,omitempty"`
 }
 
 type DataImportError struct {
@@ -399,6 +404,21 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	// 收集需要异步设置隐私的 Antigravity OAuth 账号
 	var privacyAccounts []*service.Account
 
+	// CPA(xai-*.json)账号先转换为 DataAccount 再走统一导入(定制)
+	for i := range dataPayload.XaiAccounts {
+		item, convErr := convertXaiAccount(dataPayload.XaiAccounts[i], i)
+		if convErr != nil {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    fmt.Sprintf("xai-account-%d", i+1),
+				Message: convErr.Error(),
+			})
+			continue
+		}
+		dataPayload.Accounts = append(dataPayload.Accounts, item)
+	}
+
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
 		if err := validateDataAccount(item); err != nil {
@@ -460,7 +480,10 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
 			privacyAccounts = append(privacyAccounts, created)
 		}
-		h.scheduleGrokImportProbe(created)
+		// 定制:grok OAuth 账号导入后进入「刷新→测试」后台流水,取代原配额探测
+		if h.scheduleGrokImportPipeline(created) {
+			result.GrokPipelineScheduled++
+		}
 		result.AccountCreated++
 	}
 

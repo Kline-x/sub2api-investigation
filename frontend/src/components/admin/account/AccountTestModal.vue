@@ -356,6 +356,10 @@ const loadAvailableModels = async () => {
     if (availableModels.value.length > 0) {
       if (props.account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
+      } else if (props.account.platform === 'grok') {
+        // 定制: grok 单测默认 grok-4.5
+        const grok45 = availableModels.value.find((m) => m.id === 'grok-4.5')
+        selectedModelId.value = grok45?.id || availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
         const sonnetModel = availableModels.value.find((m) => m.id.includes('sonnet'))

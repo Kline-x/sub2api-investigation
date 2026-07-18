@@ -46,6 +46,12 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 }
 
 // AccountHandler handles admin account management
+// backgroundAccountTester 是批量测试与导入后流水共用的非 SSE 程序化测试端口,
+// 生产实现为 *service.AccountTestService(定制)。
+type backgroundAccountTester interface {
+	RunTestBackground(ctx context.Context, accountID int64, modelID string) (*service.ScheduledTestResult, error)
+}
+
 type AccountHandler struct {
 	adminService            service.AdminService
 	oauthService            *service.OAuthService
@@ -62,6 +68,7 @@ type AccountHandler struct {
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
 	grokImportProber        grokUsageProber
+	accountTester           backgroundAccountTester
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -81,7 +88,7 @@ func NewAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 ) *AccountHandler {
-	return &AccountHandler{
+	handler := &AccountHandler{
 		adminService:            adminService,
 		oauthService:            oauthService,
 		openaiOAuthService:      openaiOAuthService,
@@ -97,6 +104,11 @@ func NewAccountHandler(
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
 	}
+	// typed-nil: 必须判空再赋值,避免 accountTester != nil 但方法调用 panic
+	if accountTestService != nil {
+		handler.accountTester = accountTestService
+	}
+	return handler
 }
 
 // CreateAccountRequest represents create account request
@@ -1275,6 +1287,12 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 		tokenInfo, err := h.grokOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
+			// 定制:invalid_grant/上游4xx(非429)等不可恢复失败 → 置错停调度;网络/5xx 只返回错误
+			if service.IsGrokRefreshPermanentFailure(err) {
+				if setErr := h.adminService.SetAccountError(ctx, account.ID, "Grok token refresh failed: "+err.Error()); setErr != nil {
+					log.Printf("[WARN] Failed to set error for grok account %d after refresh failure: %v", account.ID, setErr)
+				}
+			}
 			return nil, "", fmt.Errorf("failed to refresh Grok credentials: %w", err)
 		}
 
@@ -1518,6 +1536,37 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// SetError handles manually marking an account as error (定制:测试失败只做临时不可调度,永久错误由管理员手动确认)
+// POST /api/v1/admin/accounts/:id/set-error
+func (h *AccountHandler) SetError(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	var req struct {
+		ErrorMessage string `json:"error_message"`
+	}
+	// body 可选:不传则使用默认文案
+	_ = c.ShouldBindJSON(&req)
+	msg := strings.TrimSpace(req.ErrorMessage)
+	if msg == "" {
+		msg = "Manually marked as error by admin"
+	}
+
+	if err := h.adminService.SetAccountError(c.Request.Context(), accountID, msg); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
 // RevertProxyFallback handles reverting account proxy to original before fallback.
 // POST /api/v1/admin/accounts/:id/revert-proxy-fallback
 func (h *AccountHandler) RevertProxyFallback(c *gin.Context) {
@@ -1581,6 +1630,65 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 				}
 			}
 
+			mu.Lock()
+			successCount++
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"total":   len(req.AccountIDs),
+		"success": successCount,
+		"failed":  failedCount,
+		"errors":  errors,
+	})
+}
+
+// BatchSetError handles batch marking accounts as error (定制)
+// POST /api/v1/admin/accounts/batch-set-error
+func (h *AccountHandler) BatchSetError(c *gin.Context) {
+	var req struct {
+		AccountIDs   []int64 `json:"account_ids"`
+		ErrorMessage string  `json:"error_message"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if len(req.AccountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	msg := strings.TrimSpace(req.ErrorMessage)
+	if msg == "" {
+		msg = "Manually marked as error by admin"
+	}
+
+	ctx := c.Request.Context()
+	const maxConcurrency = 10
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrency)
+
+	var mu sync.Mutex
+	var successCount, failedCount int
+	var errors []gin.H
+
+	for _, id := range req.AccountIDs {
+		accountID := id
+		g.Go(func() error {
+			if err := h.adminService.SetAccountError(gctx, accountID, msg); err != nil {
+				mu.Lock()
+				failedCount++
+				errors = append(errors, gin.H{"account_id": accountID, "error": err.Error()})
+				mu.Unlock()
+				return nil
+			}
 			mu.Lock()
 			successCount++
 			mu.Unlock()
@@ -1692,6 +1800,126 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 		"failed":   failedCount,
 		"errors":   errors,
 		"warnings": warnings,
+	})
+}
+
+// BatchTestResultItem 单个账号的批量测试结果
+type BatchTestResultItem struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	LatencyMs    int64  `json:"latency_ms"`
+}
+
+// BatchTest handles batch testing account connectivity
+// POST /api/v1/admin/accounts/batch-test
+// 定制:后端并发批测,复用 RunTestBackground;按平台 models_by_platform 选模型,缺省则各平台默认(grok-4.5 等);
+// 测试失败置错在 service 层统一生效(见 testGrokAccountConnection)。
+func (h *AccountHandler) BatchTest(c *gin.Context) {
+	var req struct {
+		AccountIDs       []int64           `json:"account_ids"`
+		ModelsByPlatform map[string]string `json:"models_by_platform"` // 可选;platform → model_id
+		ModelID          string            `json:"model_id"`           // 可选兼容:无 map 时整批共用
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if len(req.AccountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	if h.accountTester == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account test service unavailable")
+		return
+	}
+
+	ctx := c.Request.Context()
+	accounts, err := h.adminService.GetAccountsByIDs(ctx, req.AccountIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	foundIDs := make(map[int64]bool, len(accounts))
+	for _, acc := range accounts {
+		if acc != nil {
+			foundIDs[acc.ID] = true
+		}
+	}
+
+	var mu sync.Mutex
+	var successCount, failedCount int
+	results := make([]BatchTestResultItem, 0, len(req.AccountIDs))
+
+	for _, id := range req.AccountIDs {
+		if !foundIDs[id] {
+			failedCount++
+			results = append(results, BatchTestResultItem{ID: id, Status: "failed", ErrorMessage: "account not found"})
+		}
+	}
+
+	const maxConcurrency = 10
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrency)
+
+	// 注意：所有 goroutine 必须 return nil，避免 errgroup cancel 其他并发任务
+	for _, account := range accounts {
+		acc := account // 闭包捕获
+		if acc == nil {
+			continue
+		}
+		g.Go(func() error {
+			item := BatchTestResultItem{ID: acc.ID, Name: acc.Name}
+			modelID := req.ModelID
+			if req.ModelsByPlatform != nil {
+				if m, ok := req.ModelsByPlatform[acc.Platform]; ok {
+					modelID = m
+				} else {
+					modelID = "" // 该平台未选 → 后端默认
+				}
+			}
+			testResult, testErr := h.accountTester.RunTestBackground(gctx, acc.ID, modelID)
+			switch {
+			case testErr != nil:
+				item.Status = "failed"
+				item.ErrorMessage = testErr.Error()
+			case testResult != nil:
+				item.Status = testResult.Status
+				item.ErrorMessage = testResult.ErrorMessage
+				item.LatencyMs = testResult.LatencyMs
+			default:
+				item.Status = "failed"
+				item.ErrorMessage = "empty test result"
+			}
+			if item.Status == "success" && h.rateLimitService != nil {
+				if _, recoverErr := h.rateLimitService.RecoverAccountAfterSuccessfulTest(gctx, acc.ID); recoverErr != nil {
+					log.Printf("[WARN] batch test recover account %d failed: %v", acc.ID, recoverErr)
+				}
+			}
+			mu.Lock()
+			if item.Status == "success" {
+				successCount++
+			} else {
+				failedCount++
+			}
+			results = append(results, item)
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"total":   len(req.AccountIDs),
+		"success": successCount,
+		"failed":  failedCount,
+		"results": results,
 	})
 }
 

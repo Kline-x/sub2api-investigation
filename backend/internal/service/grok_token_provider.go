@@ -67,7 +67,9 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 		return "", errors.New("not a grok oauth account")
 	}
 	selectedProxyID := cloneGrokProxyID(account.ProxyID)
-	if eligibilityErr := grokOAuthRequestAccountEligibilityError(account); eligibilityErr != nil {
+	// 管理员连接测试允许 error/暂停/temp 等非调度态取 token,以便测通后恢复正常(定制)。
+	// 网关请求路径仍要求 IsSchedulable,避免错误账号被调度使用。
+	if eligibilityErr := grokOAuthAccountEligibilityError(account, isAccountConnectionTestPath(ctx)); eligibilityErr != nil {
 		return "", withGrokCredentialFailureSnapshot(eligibilityErr, account)
 	}
 
@@ -111,7 +113,7 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 				return "", withGrokCredentialFailureSnapshot(errGrokOAuthAccessTokenExpired, account)
 			}
 		} else if result != nil && result.Account != nil {
-			if eligibilityErr := grokOAuthRequestAccountEligibilityError(result.Account); eligibilityErr != nil {
+			if eligibilityErr := grokOAuthAccountEligibilityError(result.Account, isAccountConnectionTestPath(ctx)); eligibilityErr != nil {
 				return "", withGrokCredentialFailureSnapshot(eligibilityErr, result.Account)
 			}
 			if !grokCredentialProxyIDsEqual(result.Account.ProxyID, selectedProxyID) {
@@ -133,7 +135,7 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	if p.tokenCache != nil {
 		latestAccount, isStale := CheckTokenVersion(ctx, account, p.accountRepo)
 		if isStale && latestAccount != nil {
-			if eligibilityErr := grokOAuthRequestAccountEligibilityError(latestAccount); eligibilityErr != nil {
+			if eligibilityErr := grokOAuthAccountEligibilityError(latestAccount, isAccountConnectionTestPath(ctx)); eligibilityErr != nil {
 				return "", withGrokCredentialFailureSnapshot(eligibilityErr, latestAccount)
 			}
 			if !grokCredentialProxyIDsEqual(latestAccount.ProxyID, selectedProxyID) {
@@ -195,7 +197,7 @@ func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *
 				return "", errOAuthRefreshAccountStateChanged
 			} else {
 				sawAuthoritativeState = true
-				if eligibilityErr := grokOAuthRequestAccountEligibilityError(latest); eligibilityErr != nil {
+				if eligibilityErr := grokOAuthAccountEligibilityError(latest, isAccountConnectionTestPath(ctx)); eligibilityErr != nil {
 					return "", withGrokCredentialFailureSnapshot(eligibilityErr, latest)
 				}
 				if !grokCredentialProxyIDsEqual(latest.ProxyID, selectedProxyID) {
@@ -241,14 +243,44 @@ func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *
 	}
 }
 
+// grokOAuthRequestAccountEligibilityError 网关/调度请求路径:必须可调度。
 func grokOAuthRequestAccountEligibilityError(account *Account) error {
-	if account == nil || !account.IsGrokOAuth() || !account.IsSchedulable() {
+	return grokOAuthAccountEligibilityError(account, false)
+}
+
+// grokOAuthAccountEligibilityError 校验 Grok OAuth 账号是否可取 token。
+// allowNonSchedulable=true 时跳过 IsSchedulable(供管理员连接测试恢复错误/暂停账号)。
+// 仍要求平台类型正确,且配置了 proxy_id 时 proxy 必须可加载。
+func grokOAuthAccountEligibilityError(account *Account, allowNonSchedulable bool) error {
+	if account == nil || !account.IsGrokOAuth() {
+		return errOAuthRefreshAccountStateChanged
+	}
+	if !allowNonSchedulable && !account.IsSchedulable() {
 		return errOAuthRefreshAccountStateChanged
 	}
 	if account.ProxyID != nil && account.Proxy == nil {
 		return errGrokOAuthConfiguredProxyMiss
 	}
 	return nil
+}
+
+type accountConnectionTestPathKey struct{}
+
+// withAccountConnectionTestPath 标记当前 ctx 属于管理员「测试连接/批量测试」路径。
+// Grok 取 token / 刷新在此路径下允许非调度态账号,以便测通后恢复正常(定制)。
+func withAccountConnectionTestPath(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, accountConnectionTestPathKey{}, true)
+}
+
+func isAccountConnectionTestPath(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	marked, _ := ctx.Value(accountConnectionTestPathKey{}).(bool)
+	return marked
 }
 
 func cloneGrokProxyID(proxyID *int64) *int64 {
