@@ -465,7 +465,7 @@ func TestGrokQuotaServiceProbeUsageFreeExhaustionBlocksFor24Hours(t *testing.T) 
 			`{"error":"subscription:free-usage-exhausted","error_description":"Usage resets over a rolling 24-hour window"}`,
 		)),
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 	before := time.Now()
 
 	result, err := svc.ProbeUsage(context.Background(), account.ID)
