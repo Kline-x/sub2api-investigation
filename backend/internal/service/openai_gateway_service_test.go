@@ -47,6 +47,13 @@ func (r *snapshotUpdateAccountRepo) UpdateExtra(ctx context.Context, id int64, u
 	return nil
 }
 
+// SetTempUnschedulable no-op: compact probe tests only assert UpdateExtra side effects.
+// Without this override, the embedded nil AccountRepository panics when test HTTP failures
+// mark temp-unschedulable (custom test-failure policy).
+func (r *snapshotUpdateAccountRepo) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	return nil
+}
+
 func (r stubOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
 	for i := range r.accounts {
 		if r.accounts[i].ID == id {

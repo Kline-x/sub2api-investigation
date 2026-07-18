@@ -22,6 +22,9 @@ type rateLimitClearRepoStub struct {
 	clearAntigravityCalls     int
 	clearModelRateLimitCalls  int
 	clearTempUnschedCalls     int
+	setSchedulableCalls       int
+	setSchedulableValue       *bool
+	setSchedulableErr         error
 	clearErrorErr             error
 	clearRateLimitErr         error
 	clearAntigravityErr       error
@@ -60,6 +63,35 @@ func (r *rateLimitClearRepoStub) ClearModelRateLimits(ctx context.Context, id in
 func (r *rateLimitClearRepoStub) ClearTempUnschedulable(ctx context.Context, id int64) error {
 	r.clearTempUnschedCalls++
 	return r.clearTempUnschedulableErr
+}
+
+func (r *rateLimitClearRepoStub) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
+	r.setSchedulableCalls++
+	r.setSchedulableValue = &schedulable
+	return r.setSchedulableErr
+}
+
+type tempUnschedEntryCounterRecorder struct {
+	resetIDs     []int64
+	incrementN   map[int64]int64
+	resetErr     error
+	incrementErr error
+}
+
+func (c *tempUnschedEntryCounterRecorder) IncrementTempUnschedEntryCount(ctx context.Context, accountID int64) (int64, error) {
+	if c.incrementErr != nil {
+		return 0, c.incrementErr
+	}
+	if c.incrementN == nil {
+		c.incrementN = make(map[int64]int64)
+	}
+	c.incrementN[accountID]++
+	return c.incrementN[accountID], nil
+}
+
+func (c *tempUnschedEntryCounterRecorder) ResetTempUnschedEntryCount(ctx context.Context, accountID int64) error {
+	c.resetIDs = append(c.resetIDs, accountID)
+	return c.resetErr
 }
 
 type tempUnschedCacheRecorder struct {
@@ -206,6 +238,7 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_ClearsErrorAndRateLi
 		getByIDAccount: &Account{
 			ID:                     42,
 			Status:                 StatusError,
+			Schedulable:            false,
 			RateLimitedAt:          &now,
 			TempUnschedulableUntil: &now,
 			Extra: map[string]any{
@@ -219,15 +252,18 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_ClearsErrorAndRateLi
 		},
 	}
 	cache := &tempUnschedCacheRecorder{}
+	counter := &tempUnschedEntryCounterRecorder{}
 	blocker := &runtimeBlockRecorder{}
 	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, cache)
 	svc.SetAccountRuntimeBlocker(blocker)
+	svc.SetTempUnschedEntryCounterCache(counter)
 
 	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 42)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.ClearedError)
 	require.True(t, result.ClearedRateLimit)
+	require.True(t, result.RestoredSchedulable)
 
 	require.Equal(t, 1, repo.getByIDCalls)
 	require.Equal(t, 1, repo.clearErrorCalls)
@@ -235,27 +271,35 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_ClearsErrorAndRateLi
 	require.Equal(t, 1, repo.clearAntigravityCalls)
 	require.Equal(t, 1, repo.clearModelRateLimitCalls)
 	require.Equal(t, 1, repo.clearTempUnschedCalls)
+	require.Equal(t, 1, repo.setSchedulableCalls)
+	require.NotNil(t, repo.setSchedulableValue)
+	require.True(t, *repo.setSchedulableValue)
 	require.Equal(t, []int64{42}, cache.deletedIDs)
 	require.Equal(t, []int64{42}, blocker.clearedIDs)
+	require.Equal(t, []int64{42}, counter.resetIDs)
 }
 
-func TestRateLimitService_RecoverAccountAfterSuccessfulTest_NoRecoverableStateIsNoop(t *testing.T) {
+func TestRateLimitService_RecoverAccountAfterSuccessfulTest_NoRecoverableStateStillRestoresSchedulable(t *testing.T) {
+	// 定制:即使无 error/temp,恢复路径仍强制打开调度并清零 temp re-entry 计数。
 	repo := &rateLimitClearRepoStub{
 		getByIDAccount: &Account{
 			ID:          7,
 			Status:      StatusActive,
-			Schedulable: true,
+			Schedulable: false,
 			Extra:       map[string]any{},
 		},
 	}
 	cache := &tempUnschedCacheRecorder{}
+	counter := &tempUnschedEntryCounterRecorder{}
 	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, cache)
+	svc.SetTempUnschedEntryCounterCache(counter)
 
 	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 7)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.False(t, result.ClearedError)
 	require.False(t, result.ClearedRateLimit)
+	require.True(t, result.RestoredSchedulable)
 
 	require.Equal(t, 1, repo.getByIDCalls)
 	require.Equal(t, 0, repo.clearErrorCalls)
@@ -263,7 +307,11 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_NoRecoverableStateIs
 	require.Equal(t, 0, repo.clearAntigravityCalls)
 	require.Equal(t, 0, repo.clearModelRateLimitCalls)
 	require.Equal(t, 0, repo.clearTempUnschedCalls)
+	require.Equal(t, 1, repo.setSchedulableCalls)
+	require.NotNil(t, repo.setSchedulableValue)
+	require.True(t, *repo.setSchedulableValue)
 	require.Empty(t, cache.deletedIDs)
+	require.Equal(t, []int64{7}, counter.resetIDs)
 }
 
 func TestRateLimitService_RecoverAccountAfterSuccessfulTest_ClearErrorFailed(t *testing.T) {

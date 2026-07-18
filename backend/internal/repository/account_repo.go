@@ -41,6 +41,7 @@ import (
 //   - client: Ent 客户端，用于类型安全的 ORM 操作
 //   - sql: 原生 SQL 执行器，用于复杂查询和批量操作
 //   - schedulerCache: 调度器缓存，用于在账号状态变更时同步快照
+//   - tempUnschedEntryCounter: 可选；真正重新进入 temp 时累计，达阈值自动 SetError(定制)
 type accountRepository struct {
 	client *dbent.Client // Ent ORM 客户端
 	sql    sqlExecutor   // 原生 SQL 执行接口
@@ -49,6 +50,10 @@ type accountRepository struct {
 	// Used to proactively sync account snapshot to cache when status changes,
 	// ensuring sticky sessions can promptly detect unavailable accounts.
 	schedulerCache service.SchedulerCache
+	// tempUnschedEntryCounter 可选依赖：nil 时不计数(单测/旧路径兼容)。
+	tempUnschedEntryCounter service.TempUnschedEntryCounterCache
+	// setErrorForTest 仅单测注入；生产路径走 SetError。
+	setErrorForTest func(ctx context.Context, id int64, errorMsg string) error
 }
 
 var schedulerNeutralExtraKeyPrefixes = []string{
@@ -69,14 +74,29 @@ const postgresParameterBatchSize = 50000
 
 // NewAccountRepository 创建账户仓储实例。
 // 这是对外暴露的构造函数，返回接口类型以便于依赖注入。
-func NewAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache service.SchedulerCache) service.AccountRepository {
-	return newAccountRepositoryWithSQL(client, sqlDB, schedulerCache)
+func NewAccountRepository(
+	client *dbent.Client,
+	sqlDB *sql.DB,
+	schedulerCache service.SchedulerCache,
+	tempUnschedEntryCounter service.TempUnschedEntryCounterCache,
+) service.AccountRepository {
+	repo := newAccountRepositoryWithSQL(client, sqlDB, schedulerCache)
+	repo.tempUnschedEntryCounter = tempUnschedEntryCounter
+	return repo
 }
 
 // NewAdminAccountRepository exposes the account repository's atomic duplication capability
 // as an explicit dependency of the admin service.
-func NewAdminAccountRepository(client *dbent.Client, sqlDB *sql.DB, schedulerCache service.SchedulerCache) service.AdminAccountRepository {
-	return newAccountRepositoryWithSQL(client, sqlDB, schedulerCache)
+// 与 NewAccountRepository 共享同一 temp-entry 计数器，确保 admin 路径与运行时路径计数一致。
+func NewAdminAccountRepository(
+	client *dbent.Client,
+	sqlDB *sql.DB,
+	schedulerCache service.SchedulerCache,
+	tempUnschedEntryCounter service.TempUnschedEntryCounterCache,
+) service.AdminAccountRepository {
+	repo := newAccountRepositoryWithSQL(client, sqlDB, schedulerCache)
+	repo.tempUnschedEntryCounter = tempUnschedEntryCounter
+	return repo
 }
 
 // newAccountRepositoryWithSQL 是内部构造函数，支持依赖注入 SQL 执行器。
@@ -1215,24 +1235,80 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 	if err != nil {
 		return false, err
 	}
-	result, err := r.sql.ExecContext(ctx, `
-		WITH updated AS (
-		UPDATE accounts AS a
-		SET temp_unschedulable_until = $1,
-			temp_unschedulable_reason = $2,
-			updated_at = NOW()
-		WHERE a.id = $3
-			AND a.deleted_at IS NULL
-			AND a.platform = $4
-			AND a.type = $5
-			AND a.status = $6
-			AND a.credentials = $7::jsonb
-			AND a.proxy_id IS NOT DISTINCT FROM $8
-			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until < $1)
-		RETURNING a.id
+
+	// counter 未注入：保持原 Exec 路径(单测兼容)。
+	if r.tempUnschedEntryCounter == nil {
+		result, err := r.sql.ExecContext(ctx, `
+			WITH updated AS (
+			UPDATE accounts AS a
+			SET temp_unschedulable_until = $1,
+				temp_unschedulable_reason = $2,
+				updated_at = NOW()
+			WHERE a.id = $3
+				AND a.deleted_at IS NULL
+				AND a.platform = $4
+				AND a.type = $5
+				AND a.status = $6
+				AND a.credentials = $7::jsonb
+				AND a.proxy_id IS NOT DISTINCT FROM $8
+				AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until < $1)
+			RETURNING a.id
+			)
+			INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+			SELECT $9, updated.id, NULL, NULL FROM updated
+		`,
+			until,
+			reason,
+			id,
+			service.PlatformGrok,
+			service.AccountTypeOAuth,
+			service.StatusActive,
+			string(expectedJSON),
+			expectedProxyID,
+			service.SchedulerOutboxEventAccountChanged,
 		)
-		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $9, updated.id, NULL, NULL FROM updated
+		if err != nil {
+			return false, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if rowsAffected == 0 {
+			return false, nil
+		}
+		r.syncSchedulerAccountSnapshotDetached(ctx, id)
+		return true, nil
+	}
+
+	// 带计数：捕获 re-entry(旧 until 为空/过期)；窗口延长不计次。
+	rows, err := r.sql.QueryContext(ctx, `
+		WITH old AS (
+			SELECT id, temp_unschedulable_until AS old_until
+			FROM accounts
+			WHERE id = $3
+				AND deleted_at IS NULL
+				AND platform = $4
+				AND type = $5
+				AND status = $6
+				AND credentials = $7::jsonb
+				AND proxy_id IS NOT DISTINCT FROM $8
+		),
+		updated AS (
+			UPDATE accounts AS a
+			SET temp_unschedulable_until = $1,
+				temp_unschedulable_reason = $2,
+				updated_at = NOW()
+			FROM old
+			WHERE a.id = old.id
+				AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until < $1)
+			RETURNING a.id, (old.old_until IS NULL OR old.old_until <= NOW()) AS reentered
+		),
+		outbox AS (
+			INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+			SELECT $9, updated.id, NULL, NULL FROM updated
+		)
+		SELECT id, reentered FROM updated
 	`,
 		until,
 		reason,
@@ -1247,15 +1323,62 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 	if err != nil {
 		return false, err
 	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
+	defer func() { _ = rows.Close() }()
+
+	var applied bool
+	var reentered bool
+	if rows.Next() {
+		var returnedID int64
+		if scanErr := rows.Scan(&returnedID, &reentered); scanErr != nil {
+			return false, scanErr
+		}
+		applied = true
+	}
+	if err := rows.Err(); err != nil {
 		return false, err
 	}
-	if rowsAffected == 0 {
+	if !applied {
 		return false, nil
 	}
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	if reentered {
+		r.recordTempUnschedReentry(ctx, id)
+	}
 	return true, nil
+}
+
+// recordTempUnschedReentry 在真正重新进入 temp 时递增计数；达阈值则自动 SetError(定制)。
+func (r *accountRepository) recordTempUnschedReentry(ctx context.Context, id int64) {
+	if r == nil || r.tempUnschedEntryCounter == nil || id <= 0 {
+		return
+	}
+	count, err := r.tempUnschedEntryCounter.IncrementTempUnschedEntryCount(ctx, id)
+	if err != nil {
+		logger.LegacyPrintf("repository.account", "[TempUnschedEntry] increment failed: account=%d err=%v", id, err)
+		return
+	}
+	if count < int64(service.TempUnschedEntryErrorThreshold) {
+		return
+	}
+	msg := "temporary unschedulable entered 3 times"
+	var setErr error
+	if r.setErrorForTest != nil {
+		setErr = r.setErrorForTest(ctx, id, msg)
+	} else {
+		setErr = r.SetError(ctx, id, msg)
+	}
+	if setErr != nil {
+		logger.LegacyPrintf("repository.account", "[TempUnschedEntry] set error failed: account=%d err=%v", id, setErr)
+		return
+	}
+	// error 态下清掉 temp 字段，避免 UI 同时显示 temp 与 error。
+	if clearErr := r.ClearTempUnschedulable(ctx, id); clearErr != nil {
+		logger.LegacyPrintf("repository.account", "[TempUnschedEntry] clear temp after set error failed: account=%d err=%v", id, clearErr)
+	}
+	if resetErr := r.tempUnschedEntryCounter.ResetTempUnschedEntryCount(ctx, id); resetErr != nil {
+		logger.LegacyPrintf("repository.account", "[TempUnschedEntry] reset counter failed: account=%d err=%v", id, resetErr)
+	}
+	logger.LegacyPrintf("repository.account", "[TempUnschedEntry] account disabled after %d re-entries: account=%d", count, id)
 }
 
 // syncSchedulerAccountSnapshot 在账号状态变更时主动同步快照到调度器缓存。
@@ -1855,29 +1978,77 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 }
 
 func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
-	result, err := r.sql.ExecContext(ctx, `
-		UPDATE accounts
+	// counter 未注入时保持原 Exec 路径(单测兼容、零开销)。
+	if r == nil || r.tempUnschedEntryCounter == nil {
+		result, err := r.sql.ExecContext(ctx, `
+			UPDATE accounts
+			SET temp_unschedulable_until = $1,
+				temp_unschedulable_reason = $2,
+				updated_at = NOW()
+			WHERE id = $3
+				AND deleted_at IS NULL
+				AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
+		`, until, reason, id)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected <= 0 {
+			return nil
+		}
+		if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+			logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue temp unschedulable failed: account=%d err=%v", id, err)
+		}
+		r.syncSchedulerAccountSnapshot(ctx, id)
+		return nil
+	}
+
+	// 带计数：RETURNING 是否 re-entry(旧 until 为空或已过期)。窗口延长不计次。
+	rows, err := r.sql.QueryContext(ctx, `
+		UPDATE accounts AS a
 		SET temp_unschedulable_until = $1,
 			temp_unschedulable_reason = $2,
 			updated_at = NOW()
-		WHERE id = $3
-			AND deleted_at IS NULL
-			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
+		FROM (
+			SELECT id, temp_unschedulable_until AS old_until
+			FROM accounts
+			WHERE id = $3
+				AND deleted_at IS NULL
+		) AS old
+		WHERE a.id = old.id
+			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until < $1)
+		RETURNING a.id, (old.old_until IS NULL OR old.old_until <= NOW()) AS reentered
 	`, until, reason, id)
 	if err != nil {
 		return err
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
+	defer func() { _ = rows.Close() }()
+
+	var applied bool
+	var reentered bool
+	if rows.Next() {
+		var returnedID int64
+		if scanErr := rows.Scan(&returnedID, &reentered); scanErr != nil {
+			return scanErr
+		}
+		applied = true
+	}
+	if err := rows.Err(); err != nil {
 		return err
 	}
-	if affected <= 0 {
+	if !applied {
 		return nil
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue temp unschedulable failed: account=%d err=%v", id, err)
 	}
 	r.syncSchedulerAccountSnapshot(ctx, id)
+	if reentered {
+		r.recordTempUnschedReentry(ctx, id)
+	}
 	return nil
 }
 
@@ -1923,6 +2094,8 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 		return false, err
 	}
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	// WHERE 已要求 temp 为空或已过期 → 成功 apply 即为 re-entry。
+	r.recordTempUnschedReentry(ctx, id)
 	return true, nil
 }
 

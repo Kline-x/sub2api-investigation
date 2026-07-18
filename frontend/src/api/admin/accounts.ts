@@ -759,6 +759,31 @@ export async function batchClearError(accountIds: number[]): Promise<BatchOperat
 }
 
 /**
+ * 手动将账号标记为错误状态(定制)。
+ * 测试失败默认只做临时不可调度,需要永久停用时由管理员确认后调用。
+ */
+export async function setError(id: number, errorMessage?: string): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/set-error`, {
+    error_message: errorMessage || undefined
+  })
+  return data
+}
+
+/**
+ * 批量手动标记为错误状态(定制)。
+ */
+export async function batchSetError(
+  accountIds: number[],
+  errorMessage?: string
+): Promise<BatchOperationResult> {
+  const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-set-error', {
+    account_ids: accountIds,
+    error_message: errorMessage || undefined
+  })
+  return data
+}
+
+/**
  * Batch refresh account credentials
  * @param accountIds - Array of account IDs
  * @returns Batch operation result
@@ -923,6 +948,7 @@ export const accountsAPI = {
   applyOAuthCredentials,
   getStats,
   clearError,
+  setError,
   getUsage,
   getTodayStats,
   getBatchTodayStats,
@@ -949,6 +975,7 @@ export const accountsAPI = {
   createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,
   batchClearError,
+  batchSetError,
   batchRefresh,
   batchTest,
   setPrivacy,

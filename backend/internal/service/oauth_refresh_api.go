@@ -226,13 +226,16 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		return nil, fmt.Errorf("%w: account identity mismatch", errOAuthRefreshAccountRereadFailed)
 	}
 	if !freshAccount.IsActive() {
-		if requestPath {
-			return nil, fmt.Errorf("%w: account is not active", errOAuthRefreshAccountStateChanged)
+		// 管理员连接测试允许从 error 态刷新 token(定制);其它请求路径仍拒绝。
+		if !(requestPath && isAccountConnectionTestPath(ctx) && freshAccount.IsGrokOAuth() && freshAccount.Status == StatusError) {
+			if requestPath {
+				return nil, fmt.Errorf("%w: account is not active", errOAuthRefreshAccountStateChanged)
+			}
+			return &OAuthRefreshResult{Account: freshAccount}, nil
 		}
-		return &OAuthRefreshResult{Account: freshAccount}, nil
 	}
 	if requestPath && freshAccount.Platform == PlatformGrok {
-		if eligibilityErr := grokOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {
+		if eligibilityErr := grokOAuthAccountEligibilityError(freshAccount, isAccountConnectionTestPath(ctx)); eligibilityErr != nil {
 			return nil, withGrokCredentialFailureSnapshot(eligibilityErr, freshAccount)
 		}
 	}
@@ -267,7 +270,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		if isInvalidGrantError(refreshErr) {
 			if recoveredAccount, recovered := api.tryRecoverFromRefreshRace(ctx, freshAccount); recovered {
 				if requestPath && recoveredAccount.Platform == PlatformGrok {
-					if eligibilityErr := grokOAuthRequestAccountEligibilityError(recoveredAccount); eligibilityErr != nil {
+					if eligibilityErr := grokOAuthAccountEligibilityError(recoveredAccount, isAccountConnectionTestPath(ctx)); eligibilityErr != nil {
 						return nil, withGrokCredentialFailureSnapshot(eligibilityErr, recoveredAccount)
 					}
 				}
@@ -360,7 +363,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 
 	if requestPath && freshAccount.Platform == PlatformGrok {
-		if eligibilityErr := grokOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {
+		if eligibilityErr := grokOAuthAccountEligibilityError(freshAccount, isAccountConnectionTestPath(ctx)); eligibilityErr != nil {
 			return nil, withGrokCredentialFailureSnapshot(eligibilityErr, freshAccount)
 		}
 	}

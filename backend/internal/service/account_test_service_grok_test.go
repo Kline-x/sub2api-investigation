@@ -195,32 +195,40 @@ func TestAccountTestService_Grok429WithoutQuotaHeadersUsesFallback(t *testing.T)
 	require.WithinDuration(t, before.Add(grokRateLimitFallbackCooldown), repo.resetAt, time.Second)
 }
 
-type grokAccountTestSetErrorRepo struct {
+type grokAccountTestTempUnschedRepo struct {
 	*mockAccountRepoForGemini
-	setErrorCalls int
-	lastErrorMsg  string
+	setTempUnschedCalls int
+	lastTempReason      string
+	lastTempUntil       time.Time
+	setErrorCalls       int
 }
 
-func (r *grokAccountTestSetErrorRepo) SetError(_ context.Context, _ int64, errorMsg string) error {
+func (r *grokAccountTestTempUnschedRepo) SetTempUnschedulable(_ context.Context, _ int64, until time.Time, reason string) error {
+	r.setTempUnschedCalls++
+	r.lastTempUntil = until
+	r.lastTempReason = reason
+	return nil
+}
+
+func (r *grokAccountTestTempUnschedRepo) SetError(_ context.Context, _ int64, _ string) error {
 	r.setErrorCalls++
-	r.lastErrorMsg = errorMsg
 	return nil
 }
 
 // SetRateLimited 计数,供 429 用例断言限流路径仍生效
-type grokAccountTestSetErrorAndRateLimitRepo struct {
-	*grokAccountTestSetErrorRepo
+type grokAccountTestTempUnschedAndRateLimitRepo struct {
+	*grokAccountTestTempUnschedRepo
 	rateLimitedCalls int
 }
 
-func (r *grokAccountTestSetErrorAndRateLimitRepo) SetRateLimited(_ context.Context, _ int64, _ time.Time) error {
+func (r *grokAccountTestTempUnschedAndRateLimitRepo) SetRateLimited(_ context.Context, _ int64, _ time.Time) error {
 	r.rateLimitedCalls++
 	return nil
 }
 
-func newGrokSetErrorTestAccount(id int64) *Account {
+func newGrokTempUnschedTestAccount(id int64) *Account {
 	return &Account{
-		ID: id, Name: "grok-set-error", Platform: PlatformGrok,
+		ID: id, Name: "grok-temp-unsched", Platform: PlatformGrok,
 		Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":  "grok-access-token",
@@ -230,10 +238,10 @@ func newGrokSetErrorTestAccount(id int64) *Account {
 	}
 }
 
-func TestAccountTestService_Grok403SetsAccountError(t *testing.T) {
+func TestAccountTestService_Grok403SetsTempUnschedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	account := newGrokSetErrorTestAccount(31)
-	repo := &grokAccountTestSetErrorRepo{
+	account := newGrokTempUnschedTestAccount(31)
+	repo := &grokAccountTestTempUnschedRepo{
 		mockAccountRepoForGemini: &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}},
 	}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -244,21 +252,47 @@ func TestAccountTestService_Grok403SetsAccountError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/31/test", nil)
+	before := time.Now()
 
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
 	require.Error(t, err)
-	require.Equal(t, 1, repo.setErrorCalls)
-	require.Contains(t, repo.lastErrorMsg, "403")
+	require.Equal(t, 1, repo.setTempUnschedCalls)
+	require.Zero(t, repo.setErrorCalls)
+	require.Contains(t, repo.lastTempReason, "403")
+	require.WithinDuration(t, before.Add(accountTestFailureTempUnschedDuration), repo.lastTempUntil, 2*time.Second)
 }
 
-func TestAccountTestService_Grok429DoesNotSetError(t *testing.T) {
+func TestAccountTestService_Grok400SetsTempUnschedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	account := newGrokSetErrorTestAccount(32)
-	base := &grokAccountTestSetErrorRepo{
+	account := newGrokTempUnschedTestAccount(34)
+	repo := &grokAccountTestTempUnschedRepo{
 		mockAccountRepoForGemini: &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}},
 	}
-	repo := &grokAccountTestSetErrorAndRateLimitRepo{grokAccountTestSetErrorRepo: base}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"bad request"}`)),
+	}}
+	svc := &AccountTestService{accountRepo: repo, grokTokenProvider: NewGrokTokenProvider(repo, nil), httpUpstream: upstream}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/34/test", nil)
+
+	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
+
+	require.Error(t, err)
+	require.Equal(t, 1, repo.setTempUnschedCalls)
+	require.Zero(t, repo.setErrorCalls)
+	require.Contains(t, repo.lastTempReason, "400")
+}
+
+func TestAccountTestService_Grok429DoesNotSetTempUnschedulable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGrokTempUnschedTestAccount(32)
+	base := &grokAccountTestTempUnschedRepo{
+		mockAccountRepoForGemini: &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}},
+	}
+	repo := &grokAccountTestTempUnschedAndRateLimitRepo{grokAccountTestTempUnschedRepo: base}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusTooManyRequests,
 		Header:     http.Header{"Retry-After": []string{"45"}},
@@ -272,19 +306,20 @@ func TestAccountTestService_Grok429DoesNotSetError(t *testing.T) {
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
 	require.Error(t, err)
+	require.Zero(t, base.setTempUnschedCalls)
 	require.Zero(t, base.setErrorCalls)
 	require.Equal(t, 1, repo.rateLimitedCalls)
 }
 
-func TestAccountTestService_Grok500DoesNotSetError(t *testing.T) {
+func TestAccountTestService_Grok502SetsTempUnschedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	account := newGrokSetErrorTestAccount(33)
-	repo := &grokAccountTestSetErrorRepo{
+	account := newGrokTempUnschedTestAccount(33)
+	repo := &grokAccountTestTempUnschedRepo{
 		mockAccountRepoForGemini: &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}},
 	}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusInternalServerError,
-		Body:       io.NopCloser(strings.NewReader(`{"error":"upstream down"}`)),
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"bad gateway"}`)),
 	}}
 	svc := &AccountTestService{accountRepo: repo, grokTokenProvider: NewGrokTokenProvider(repo, nil), httpUpstream: upstream}
 	rec := httptest.NewRecorder()
@@ -294,5 +329,30 @@ func TestAccountTestService_Grok500DoesNotSetError(t *testing.T) {
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
 	require.Error(t, err)
+	require.Equal(t, 1, repo.setTempUnschedCalls)
 	require.Zero(t, repo.setErrorCalls)
+	require.Contains(t, repo.lastTempReason, "502")
+}
+
+func TestAccountTestService_Grok500SetsTempUnschedulable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGrokTempUnschedTestAccount(35)
+	repo := &grokAccountTestTempUnschedRepo{
+		mockAccountRepoForGemini: &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}},
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"upstream down"}`)),
+	}}
+	svc := &AccountTestService{accountRepo: repo, grokTokenProvider: NewGrokTokenProvider(repo, nil), httpUpstream: upstream}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/35/test", nil)
+
+	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
+
+	require.Error(t, err)
+	require.Equal(t, 1, repo.setTempUnschedCalls)
+	require.Zero(t, repo.setErrorCalls)
+	require.Contains(t, repo.lastTempReason, "500")
 }

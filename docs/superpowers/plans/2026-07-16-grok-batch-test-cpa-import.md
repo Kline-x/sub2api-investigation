@@ -17,7 +17,7 @@
 - 本机 Windows,Go 工具链在 WSL:`wsl -u gaore bash -lc 'PATH="/usr/local/go/bin:$HOME/go/bin:$PATH" && cd /mnt/e/code/AI/codex/sub2api-investigation/backend && GOTOOLCHAIN=auto go test -tags unit ./internal/...'`(若 Windows 侧有 D:/go1.25 亦可直接用)
 - 前端检查:`cd frontend && npx vue-tsc --noEmit && npx vitest run`
 - 提交信息用中文
-- 失败界定(全计划统一):上游 4xx 且非 429 → `SetError`(status=error+schedulable=false);429 → 现有限流态;5xx/网络错误 → 不改状态
+- 失败界定(测试连接):上游错误响应除 429 外(400/401/403/502 等 4xx/5xx)以及取 token 失败 → `SetTempUnschedulable`(临时不可调度,默认 10 分钟);429 → 现有限流态;网络错误(无响应) → 不改状态。永久 error 由管理员手动/批量 set-error。刷新令牌仍按 4xx 非429 置错、5xx/网络不改状态
 - 测试模型:
   - 空 modelID → 各平台硬编码默认(grok=`grokDefaultResponsesModel`/`grok-4.5`,其他=`DefaultTestModel`),不另硬编码新常量
   - **批测按平台选模型**:请求可选 `models_by_platform` map(platform→model_id);每个账号取 `map[acc.Platform]`,缺省则空 model

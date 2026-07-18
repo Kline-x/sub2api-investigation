@@ -1536,6 +1536,37 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// SetError handles manually marking an account as error (定制:测试失败只做临时不可调度,永久错误由管理员手动确认)
+// POST /api/v1/admin/accounts/:id/set-error
+func (h *AccountHandler) SetError(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	var req struct {
+		ErrorMessage string `json:"error_message"`
+	}
+	// body 可选:不传则使用默认文案
+	_ = c.ShouldBindJSON(&req)
+	msg := strings.TrimSpace(req.ErrorMessage)
+	if msg == "" {
+		msg = "Manually marked as error by admin"
+	}
+
+	if err := h.adminService.SetAccountError(c.Request.Context(), accountID, msg); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
 // RevertProxyFallback handles reverting account proxy to original before fallback.
 // POST /api/v1/admin/accounts/:id/revert-proxy-fallback
 func (h *AccountHandler) RevertProxyFallback(c *gin.Context) {
@@ -1599,6 +1630,65 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 				}
 			}
 
+			mu.Lock()
+			successCount++
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"total":   len(req.AccountIDs),
+		"success": successCount,
+		"failed":  failedCount,
+		"errors":  errors,
+	})
+}
+
+// BatchSetError handles batch marking accounts as error (定制)
+// POST /api/v1/admin/accounts/batch-set-error
+func (h *AccountHandler) BatchSetError(c *gin.Context) {
+	var req struct {
+		AccountIDs   []int64 `json:"account_ids"`
+		ErrorMessage string  `json:"error_message"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if len(req.AccountIDs) == 0 {
+		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	msg := strings.TrimSpace(req.ErrorMessage)
+	if msg == "" {
+		msg = "Manually marked as error by admin"
+	}
+
+	ctx := c.Request.Context()
+	const maxConcurrency = 10
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrency)
+
+	var mu sync.Mutex
+	var successCount, failedCount int
+	var errors []gin.H
+
+	for _, id := range req.AccountIDs {
+		accountID := id
+		g.Go(func() error {
+			if err := h.adminService.SetAccountError(gctx, accountID, msg); err != nil {
+				mu.Lock()
+				failedCount++
+				errors = append(errors, gin.H{"account_id": accountID, "error": err.Error()})
+				mu.Unlock()
+				return nil
+			}
 			mu.Lock()
 			successCount++
 			mu.Unlock()

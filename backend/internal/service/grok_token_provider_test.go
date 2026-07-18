@@ -317,3 +317,32 @@ func TestGrokTokenProviderRejectsIneligibleSelectedAccountBeforeWarmCache(t *tes
 		})
 	}
 }
+
+func TestGrokTokenProviderAllowsNonSchedulableOnAccountConnectionTestPath(t *testing.T) {
+	// 定制:管理员连接测试允许 error/暂停账号取 token,网关路径仍拒绝。
+	future := time.Now().Add(2 * grokTokenRefreshSkew)
+	tests := []struct {
+		name   string
+		mutate func(*Account)
+	}{
+		{name: "error", mutate: func(account *Account) { account.Status = StatusError; account.Schedulable = false }},
+		{name: "paused", mutate: func(account *Account) { account.Schedulable = false }},
+		{name: "temp unschedulable", mutate: func(account *Account) { account.TempUnschedulableUntil = &future }},
+	}
+
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := expiredGrokOAuthAccountForCredentialTest(int64(190 + index))
+			account.Credentials["access_token"] = "warm-cache-token"
+			account.Credentials["expires_at"] = future.UTC().Format(time.RFC3339)
+			tt.mutate(account)
+			cache := &grokTokenCacheForProviderTest{token: "warm-cache-token"}
+			provider := NewGrokTokenProvider(&tokenRefreshAccountRepo{}, cache)
+
+			token, err := provider.GetAccessToken(withAccountConnectionTestPath(context.Background()), account)
+
+			require.NoError(t, err)
+			require.Equal(t, "warm-cache-token", token)
+		})
+	}
+}

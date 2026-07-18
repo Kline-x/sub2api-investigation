@@ -2,7 +2,20 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
-## v0.1.156-custom.2（2026-07-16，当前线上目标版本）
+## v0.1.156-custom.3（2026-07-18，当前线上目标版本）
+
+基于上游 v0.1.156。相对 custom.2 的功能增量：
+
+- feat：账号批量测试 `POST /admin/accounts/batch-test`（支持 `models_by_platform` 按平台选模型，Grok 默认 `grok-4.5`）
+- feat：测试失败临时不可调度；管理员可手动/批量置错
+- feat：temp 真正 re-entry 累计 3 次自动 `SetError` 并清 temp（窗口延长不计）
+- feat：测试成功 / 恢复状态 → 完全正常（ClearError + 强制 `schedulable=true` + 清 temp re-entry 计数）
+- feat：Grok 连接测试允许 error/暂停/temp 等非调度态取 token 并刷新（网关调度路径仍要求可调度）
+- feat：CPA(`xai-*.json`) 导入 + 导入后后台「刷新→测试」流水（取代配额探测）
+- feat：Grok 手动/批量刷新永久失败（invalid_grant / 上游 4xx 非 429）自动置错
+- fix：OpenAI compact 探测单测 stub 补 `SetTempUnschedulable`，避免测试失败路径空指针
+
+## v0.1.156-custom.2（2026-07-16）
 
 基于上游 v0.1.156。相对 custom.1 的修订：
 
@@ -60,7 +73,11 @@
 | 发布流水线定制 | `.goreleaser.simple.yaml` |
 | 自有仓库引用 | `VersionBadge.vue` 常量、`deploy/install.sh` `GITHUB_REPO` |
 | 账号批量测试端点（POST `/accounts/batch-test`，`models_by_platform` 按平台选模型） | `handler/admin/account_handler.go`（`BatchTest`）、`routes/admin.go`、前端 `AccountsView.vue` / `AccountBulkActionsBar.vue` / `BatchTestConfirmModal.vue` / `accounts.ts` |
-| grok 测试/刷新失败置错（4xx 非429→SetError） | `service/account_test_service.go`、`service/grok_refresh_failure.go`、`pkg/xai/errors.go`、`repository/grok_oauth_client.go`、`handler/admin/account_handler.go`、`grok_oauth_handler.go` |
+| 测试失败临时不可调度 + 手动置错（HTTP 错误/取 token 失败→temp unsched；永久 error 由管理员手动/批量 set-error） | `service/account_test_service.go`、`handler/admin/account_handler.go`（`SetError`/`BatchSetError`）、`routes/admin.go`、前端账号操作菜单与批量栏 |
+| **temp 累计 3 次自动置错**（任意入口真正 re-entry 计次；窗口延长不计；达 3 次 → SetError + 清 temp） | `service/temp_unsched_entry_counter.go`、`repository/temp_unsched_entry_counter_cache.go`、`repository/account_repo.go`（`SetTempUnschedulable` / Grok CAS 路径挂钩） |
+| **测试/恢复成功 → 完全正常**（ClearError + 强制 `schedulable=true` + 清 temp re-entry 计数） | `service/ratelimit_service.go`（`RecoverAccountState` / `RecoverAccountAfterSuccessfulTest`） |
+| **Grok 连接测试允许非调度态取 token**（error/暂停/temp 可测；网关路径仍要求可调度） | `service/grok_token_provider.go`、`oauth_refresh_api.go`、`account_test_service.go`（`withAccountConnectionTestPath`） |
+| grok 刷新失败置错（4xx 非429→SetError） | `service/grok_refresh_failure.go`、`pkg/xai/errors.go`、`repository/grok_oauth_client.go`、`handler/admin/account_handler.go`、`grok_oauth_handler.go` |
 | CPA(xai-*.json)导入 | `handler/admin/account_data_xai.go`、`account_data.go`（`XaiAccounts`）、前端 `ImportDataModal.vue` / `utils/xaiImport.ts` |
 | 导入后刷新+测试流水（取代 probe；**合并上游须保留 importData 替换点**） | `handler/admin/grok_import_pipeline.go`、`account_data.go` |
 

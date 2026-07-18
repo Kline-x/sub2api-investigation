@@ -20,18 +20,19 @@ import (
 
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
-	accountRepo           AccountRepository
-	usageRepo             UsageLogRepository
-	cfg                   *config.Config
-	geminiQuotaService    *GeminiQuotaService
-	tempUnschedCache      TempUnschedCache
-	timeoutCounterCache   TimeoutCounterCache
-	openAI403CounterCache OpenAI403CounterCache
-	settingService        *SettingService
-	tokenCacheInvalidator TokenCacheInvalidator
-	runtimeBlocker        AccountRuntimeBlocker
-	usageCacheMu          sync.RWMutex
-	usageCache            map[int64]*geminiUsageCacheEntry
+	accountRepo             AccountRepository
+	usageRepo               UsageLogRepository
+	cfg                     *config.Config
+	geminiQuotaService      *GeminiQuotaService
+	tempUnschedCache        TempUnschedCache
+	timeoutCounterCache     TimeoutCounterCache
+	openAI403CounterCache   OpenAI403CounterCache
+	tempUnschedEntryCounter TempUnschedEntryCounterCache
+	settingService          *SettingService
+	tokenCacheInvalidator   TokenCacheInvalidator
+	runtimeBlocker          AccountRuntimeBlocker
+	usageCacheMu            sync.RWMutex
+	usageCache              map[int64]*geminiUsageCacheEntry
 }
 
 type AccountRuntimeBlocker interface {
@@ -41,8 +42,9 @@ type AccountRuntimeBlocker interface {
 
 // SuccessfulTestRecoveryResult 表示测试成功后恢复了哪些运行时状态。
 type SuccessfulTestRecoveryResult struct {
-	ClearedError     bool
-	ClearedRateLimit bool
+	ClearedError        bool
+	ClearedRateLimit    bool
+	RestoredSchedulable bool // 定制:恢复路径强制打开调度
 }
 
 // AccountRecoveryOptions 控制账号恢复时的附加行为。
@@ -100,6 +102,11 @@ func (s *RateLimitService) SetTimeoutCounterCache(cache TimeoutCounterCache) {
 // SetOpenAI403CounterCache 设置 OpenAI 403 连续失败计数器（可选依赖）
 func (s *RateLimitService) SetOpenAI403CounterCache(cache OpenAI403CounterCache) {
 	s.openAI403CounterCache = cache
+}
+
+// SetTempUnschedEntryCounterCache 设置 temp re-entry 计数器(可选；恢复时清零,定制)
+func (s *RateLimitService) SetTempUnschedEntryCounterCache(cache TempUnschedEntryCounterCache) {
+	s.tempUnschedEntryCounter = cache
 }
 
 // SetSettingService 设置系统设置服务（可选依赖）
@@ -1754,6 +1761,8 @@ func (s *RateLimitService) ResetOpenAI403Counter(ctx context.Context, accountID 
 }
 
 // RecoverAccountState 按需恢复账号的可恢复运行时状态。
+// 定制:恢复路径统一强制 schedulable=true，并清零 temp re-entry 计数，
+// 保证测试成功/手动恢复后账号回到完全可调度的正常态。
 func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID int64, options AccountRecoveryOptions) (*SuccessfulTestRecoveryResult, error) {
 	account, err := s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
@@ -1779,6 +1788,20 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 		}
 		result.ClearedRateLimit = true
 	}
+
+	// 强制恢复调度:ClearError 本身不改 schedulable,error 账号测通后否则会卡在「暂停」。
+	if err := s.accountRepo.SetSchedulable(ctx, accountID, true); err != nil {
+		return nil, err
+	}
+	result.RestoredSchedulable = true
+
+	// 清零 temp re-entry 计数,避免恢复后立刻因历史计数被再置错。
+	if s.tempUnschedEntryCounter != nil {
+		if resetErr := s.tempUnschedEntryCounter.ResetTempUnschedEntryCount(ctx, accountID); resetErr != nil {
+			slog.Warn("recover_account_state_reset_temp_entry_counter_failed", "account_id", accountID, "error", resetErr)
+		}
+	}
+
 	if result.ClearedError || result.ClearedRateLimit {
 		s.ResetOpenAI403Counter(ctx, accountID)
 		if result.ClearedError && !result.ClearedRateLimit {
@@ -1807,6 +1830,12 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	// 同时清除模型级别限流
 	if err := s.accountRepo.ClearModelRateLimits(ctx, accountID); err != nil {
 		slog.Warn("clear_model_rate_limits_on_temp_unsched_reset_failed", "account_id", accountID, "error", err)
+	}
+	// 定制:手动清除 temp 也清零 re-entry 计数,避免历史次数残留。
+	if s.tempUnschedEntryCounter != nil {
+		if resetErr := s.tempUnschedEntryCounter.ResetTempUnschedEntryCount(ctx, accountID); resetErr != nil {
+			slog.Warn("clear_temp_unsched_reset_entry_counter_failed", "account_id", accountID, "error", resetErr)
+		}
 	}
 	s.notifyAccountSchedulingBlockCleared(accountID)
 	return nil
