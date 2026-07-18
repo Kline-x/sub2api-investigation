@@ -435,7 +435,14 @@ export default {
         testDialogNoModels: '无可用模型,将使用平台默认',
         resetStatusSuccess: '已成功重置 {count} 个账号状态',
         refreshTokenSuccess: '已成功刷新 {count} 个账号令牌',
-        partialSuccess: '操作部分完成：{success} 成功，{failed} 失败'
+        partialSuccess: '操作部分完成：{success} 成功，{failed} 失败',
+        deleting: '正在批量删除...',
+        resettingStatus: '正在重置状态...',
+        settingError: '正在设为错误...',
+        testing: '正在批量测试...',
+        refreshingToken: '正在刷新令牌...',
+        enablingScheduling: '正在启用调度...',
+        disablingScheduling: '正在停止调度...'
       },
       bulkEdit: {
         neverExpires: '永不过期',

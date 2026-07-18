@@ -331,7 +331,14 @@ export default {
         testDialogNoModels: 'No models available; platform default will be used',
         resetStatusSuccess: 'Successfully reset {count} account(s) status',
         refreshTokenSuccess: 'Successfully refreshed {count} account(s) token',
-        partialSuccess: 'Partially completed: {success} succeeded, {failed} failed'
+        partialSuccess: 'Partially completed: {success} succeeded, {failed} failed',
+        deleting: 'Deleting accounts...',
+        resettingStatus: 'Resetting status...',
+        settingError: 'Marking as error...',
+        testing: 'Running batch test...',
+        refreshingToken: 'Refreshing tokens...',
+        enablingScheduling: 'Enabling scheduling...',
+        disablingScheduling: 'Disabling scheduling...'
       },
       bulkEdit: {
         title: 'Bulk Edit Accounts',
