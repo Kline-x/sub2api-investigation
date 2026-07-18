@@ -23,8 +23,7 @@
 
 ```
 ghcr.io/kline-x/sub2api:<版本>    # 如 0.1.156-custom.2
-ghcr.io/kline-x/sub2api:latest
-```
+ghcr.io/kline-x/sub2api:latest```
 
 公开镜像，`docker pull` 免登录。仅 linux/amd64。
 

@@ -2,6 +2,16 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
+## v0.1.160 合并（2026-07-18，main）
+
+合并上游 `v0.1.160` 到 main。冲突处理要点：
+
+- 保留本地批测/CPA 导入、temp 三次置错、测试成功恢复、Grok 非调度态可测
+- 接入上游「探测上游倍率」批量/单账号能力与相关路由
+- 保留 `GET /accounts/ids` 与自有更新链路/发布配置
+- README 继续使用定制版说明（不恢复上游多语言 README）
+- wire 继续注入 `TempUnschedEntryCounterCache`
+
 ## v0.1.156-custom.3（2026-07-18，当前线上目标版本）
 
 基于上游 v0.1.156。相对 custom.2 的功能增量：

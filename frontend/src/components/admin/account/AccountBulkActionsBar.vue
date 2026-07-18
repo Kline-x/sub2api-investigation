@@ -47,7 +47,7 @@
         </button>
       </template>
     </div>
-    <div class="flex gap-2">
+    <div class="flex flex-wrap gap-2">
       <template v-if="selectedIds.length > 0">
         <button class="btn btn-danger btn-sm" :disabled="busy" @click="$emit('delete')">
           {{ t('admin.accounts.bulkActions.delete') }}
@@ -63,6 +63,9 @@
         </button>
         <button class="btn btn-secondary btn-sm" :disabled="busy" @click="$emit('refresh-token')">
           {{ t('admin.accounts.bulkActions.refreshToken') }}
+        </button>
+        <button class="btn btn-secondary btn-sm" :disabled="busy" @click="$emit('probe-upstream-billing')">
+          {{ t('admin.accounts.bulkActions.probeUpstreamBilling') }}
         </button>
         <button class="btn btn-success btn-sm" :disabled="busy" @click="$emit('toggle-schedulable', true)">
           {{ t('admin.accounts.bulkActions.enableScheduling') }}
@@ -90,10 +93,22 @@ defineProps<{
   allVisibleSelected: boolean
   allFilteredSelected: boolean
   selectingAll: boolean
-  /** 任意批量操作进行中时禁用操作按钮并展示处理中状态 */
   busy?: boolean
   busyLabel?: string
 }>()
-defineEmits(['delete', 'edit-selected', 'edit-filtered', 'clear', 'select-page', 'select-filtered', 'toggle-schedulable', 'reset-status', 'set-error', 'refresh-token', 'test'])
+defineEmits([
+  'delete',
+  'edit-selected',
+  'edit-filtered',
+  'clear',
+  'select-page',
+  'select-filtered',
+  'toggle-schedulable',
+  'reset-status',
+  'set-error',
+  'refresh-token',
+  'test',
+  'probe-upstream-billing'
+])
 const { t } = useI18n()
 </script>
