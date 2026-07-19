@@ -8,21 +8,36 @@
         :class="[
           hasUpdate
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
-            : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
+            : upstreamHasUpdate
+              ? 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:hover:bg-sky-900/50'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="
+          hasUpdate
+            ? t('version.updateAvailable')
+            : upstreamHasUpdate
+              ? t('version.upstreamBehindHint')
+              : t('version.upToDate')
+        "
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
           v-else
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
         ></span>
-        <!-- Update indicator -->
+        <!-- Self-update indicator -->
         <span v-if="hasUpdate" class="relative flex h-2 w-2">
           <span
             class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"
           ></span>
           <span class="relative inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
+        </span>
+        <!-- Upstream-only notice indicator -->
+        <span v-else-if="upstreamHasUpdate" class="relative flex h-2 w-2">
+          <span
+            class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"
+          ></span>
+          <span class="relative inline-flex h-2 w-2 rounded-full bg-sky-500"></span>
         </span>
       </button>
 
@@ -112,6 +127,87 @@
                       : t('version.upToDate')
                   }}
                 </p>
+              </div>
+
+              <!-- Official upstream version (Wei-Shaw/sub2api) — display only -->
+              <div
+                v-if="upstreamLatestVersion"
+                class="mb-3 rounded-lg border p-3"
+                :class="
+                  upstreamHasUpdate
+                    ? 'border-sky-200 bg-sky-50 dark:border-sky-800/50 dark:bg-sky-900/20'
+                    : 'border-gray-100 bg-gray-50 dark:border-dark-700 dark:bg-dark-900/40'
+                "
+              >
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <p
+                      class="text-[11px] font-medium uppercase tracking-wide"
+                      :class="
+                        upstreamHasUpdate
+                          ? 'text-sky-600 dark:text-sky-400'
+                          : 'text-gray-400 dark:text-dark-500'
+                      "
+                    >
+                      {{ t('version.upstreamSection') }}
+                    </p>
+                    <p
+                      class="mt-0.5 text-sm font-semibold"
+                      :class="
+                        upstreamHasUpdate
+                          ? 'text-sky-800 dark:text-sky-200'
+                          : 'text-gray-700 dark:text-dark-200'
+                      "
+                    >
+                      {{ t('version.upstreamLatest') }}: v{{ upstreamLatestVersion }}
+                    </p>
+                    <p
+                      class="mt-1 text-[11px] leading-4"
+                      :class="
+                        upstreamHasUpdate
+                          ? 'text-sky-700/80 dark:text-sky-300/80'
+                          : 'text-gray-400 dark:text-dark-500'
+                      "
+                    >
+                      {{
+                        upstreamHasUpdate
+                          ? t('version.upstreamBehindHint')
+                          : t('version.upstreamInSync')
+                      }}
+                    </p>
+                  </div>
+                  <span
+                    v-if="upstreamHasUpdate"
+                    class="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-sky-100 dark:bg-sky-900/50"
+                    :title="t('version.upstreamBehindHint')"
+                  >
+                    <span class="relative flex h-2 w-2">
+                      <span
+                        class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75"
+                      ></span>
+                      <span class="relative inline-flex h-2 w-2 rounded-full bg-sky-500"></span>
+                    </span>
+                  </span>
+                </div>
+                <a
+                  v-if="upstreamReleaseInfo?.html_url"
+                  :href="upstreamReleaseInfo.html_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="mt-2 inline-flex items-center gap-1 text-xs font-medium transition-colors"
+                  :class="
+                    upstreamHasUpdate
+                      ? 'text-sky-700 hover:text-sky-900 dark:text-sky-300 dark:hover:text-sky-100'
+                      : 'text-gray-500 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-200'
+                  "
+                >
+                  {{
+                    upstreamHasUpdate
+                      ? t('version.viewUpstreamChangelog')
+                      : t('version.viewUpstreamRelease')
+                  }}
+                  <Icon name="externalLink" size="xs" :stroke-width="2" />
+                </a>
               </div>
 
               <!-- Priority 1: Update error (must check before hasUpdate) -->
@@ -676,6 +772,9 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const upstreamLatestVersion = computed(() => appStore.upstreamLatestVersion)
+const upstreamHasUpdate = computed(() => appStore.upstreamHasUpdate)
+const upstreamReleaseInfo = computed(() => appStore.upstreamReleaseInfo)
 
 // Update process states (local to this component)
 const updating = ref(false)

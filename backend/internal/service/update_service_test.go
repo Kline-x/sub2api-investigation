@@ -233,3 +233,88 @@ func TestCompareVersionsCustomScheme(t *testing.T) {
 	// 现部署旧格式 < 新方案首版
 	require.Equal(t, -1, compareVersions("0.1.155-custom.20260714", "0.1.156-custom.1"))
 }
+
+func TestCompareUpstreamBaseline(t *testing.T) {
+	// same X.Y.Z baseline: custom is not behind upstream
+	require.Equal(t, 0, compareUpstreamBaseline("0.1.160-custom.1", "0.1.160"))
+	// behind official
+	require.Equal(t, -1, compareUpstreamBaseline("0.1.156-custom.3", "0.1.160"))
+	// ahead of official baseline
+	require.Equal(t, 1, compareUpstreamBaseline("0.1.161-custom.1", "0.1.160"))
+}
+
+type dualRepoGitHubClientStub struct {
+	selfRelease     *GitHubRelease
+	upstreamRelease *GitHubRelease
+}
+
+func (s *dualRepoGitHubClientStub) FetchLatestRelease(_ context.Context, repo string) (*GitHubRelease, error) {
+	switch repo {
+	case githubRepo:
+		return s.selfRelease, nil
+	case upstreamGithubRepo:
+		return s.upstreamRelease, nil
+	default:
+		return nil, errors.New("unexpected repo: " + repo)
+	}
+}
+
+func (s *dualRepoGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
+	return nil, nil
+}
+
+func (s *dualRepoGitHubClientStub) DownloadFile(context.Context, string, string, int64) error {
+	panic("unexpected DownloadFile")
+}
+
+func (s *dualRepoGitHubClientStub) FetchChecksumFile(context.Context, string) ([]byte, error) {
+	panic("unexpected FetchChecksumFile")
+}
+
+func TestUpdateServiceCheckUpdateIncludesUpstreamRelease(t *testing.T) {
+	client := &dualRepoGitHubClientStub{
+		selfRelease: &GitHubRelease{
+			TagName: "v0.1.160-custom.1",
+			Name:    "v0.1.160-custom.1",
+			HTMLURL: "https://github.com/Kline-x/sub2api-investigation/releases/tag/v0.1.160-custom.1",
+		},
+		upstreamRelease: &GitHubRelease{
+			TagName: "v0.1.161",
+			Name:    "v0.1.161",
+			Body:    "upstream notes",
+			HTMLURL: "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.161",
+		},
+	}
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.160-custom.1", "release")
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.Equal(t, "0.1.160-custom.1", info.LatestVersion)
+	require.False(t, info.HasUpdate)
+	require.Equal(t, "0.1.161", info.UpstreamLatestVersion)
+	require.True(t, info.UpstreamHasUpdate)
+	require.NotNil(t, info.UpstreamReleaseInfo)
+	require.Equal(t, "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.161", info.UpstreamReleaseInfo.HTMLURL)
+}
+
+func TestUpdateServiceCheckUpdateSameUpstreamBaselineNotBehind(t *testing.T) {
+	client := &dualRepoGitHubClientStub{
+		selfRelease: &GitHubRelease{
+			TagName: "v0.1.160-custom.1",
+			Name:    "v0.1.160-custom.1",
+		},
+		upstreamRelease: &GitHubRelease{
+			TagName: "v0.1.160",
+			Name:    "v0.1.160",
+			HTMLURL: "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.160",
+		},
+	}
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.1.160-custom.1", "release")
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.Equal(t, "0.1.160", info.UpstreamLatestVersion)
+	require.False(t, info.UpstreamHasUpdate)
+}

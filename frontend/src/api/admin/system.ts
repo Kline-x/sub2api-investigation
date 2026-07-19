@@ -16,6 +16,10 @@ export interface VersionInfo {
   latest_version: string
   has_update: boolean
   release_info?: ReleaseInfo
+  /** Official Wei-Shaw/sub2api latest; display-only, does not drive self-update */
+  upstream_latest_version?: string
+  upstream_has_update?: boolean
+  upstream_release_info?: ReleaseInfo
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds

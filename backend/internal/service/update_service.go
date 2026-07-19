@@ -31,6 +31,8 @@ const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
 	githubRepo     = "Kline-x/sub2api-investigation"
+	// 官方上游仓库：仅用于展示官方最新版本与发布日志，不参与本仓库在线更新/回滚
+	upstreamGithubRepo = "Wei-Shaw/sub2api"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -83,9 +85,13 @@ type UpdateInfo struct {
 	LatestVersion  string       `json:"latest_version"`
 	HasUpdate      bool         `json:"has_update"`
 	ReleaseInfo    *ReleaseInfo `json:"release_info,omitempty"`
-	Cached         bool         `json:"cached"`
-	Warning        string       `json:"warning,omitempty"`
-	BuildType      string       `json:"build_type"` // "source" or "release"
+	// Upstream* 来自官方 Wei-Shaw/sub2api，仅展示提醒，不驱动在线更新按钮
+	UpstreamLatestVersion string       `json:"upstream_latest_version,omitempty"`
+	UpstreamHasUpdate     bool         `json:"upstream_has_update"`
+	UpstreamReleaseInfo   *ReleaseInfo `json:"upstream_release_info,omitempty"`
+	Cached                bool         `json:"cached"`
+	Warning               string       `json:"warning,omitempty"`
+	BuildType             string       `json:"build_type"` // "source" or "release"
 }
 
 // ReleaseInfo contains GitHub release details
@@ -416,7 +422,7 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 		}
 	}
 
-	return &UpdateInfo{
+	info := &UpdateInfo{
 		CurrentVersion: s.currentVersion,
 		LatestVersion:  latestVersion,
 		HasUpdate:      compareVersions(s.currentVersion, latestVersion) < 0,
@@ -429,7 +435,36 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 		},
 		Cached:    false,
 		BuildType: s.buildType,
-	}, nil
+	}
+	s.attachUpstreamRelease(ctx, info)
+	return info, nil
+}
+
+// attachUpstreamRelease 查询官方上游最新 release，失败时静默忽略（不影响本仓库更新检查）。
+func (s *UpdateService) attachUpstreamRelease(ctx context.Context, info *UpdateInfo) {
+	if s == nil || info == nil || s.githubClient == nil {
+		return
+	}
+	release, err := s.githubClient.FetchLatestRelease(ctx, upstreamGithubRepo)
+	if err != nil || release == nil {
+		return
+	}
+	if release.Draft || release.Prerelease {
+		return
+	}
+	ver := strings.TrimPrefix(release.TagName, "v")
+	if ver == "" {
+		return
+	}
+	info.UpstreamLatestVersion = ver
+	// 只比较 X.Y.Z 基线：0.1.160-custom.N 与官方 0.1.160 视为同基线，不算落后
+	info.UpstreamHasUpdate = compareUpstreamBaseline(s.currentVersion, ver) < 0
+	info.UpstreamReleaseInfo = &ReleaseInfo{
+		Name:        release.Name,
+		Body:        release.Body,
+		PublishedAt: release.PublishedAt,
+		HTMLURL:     release.HTMLURL,
+	}
 }
 
 func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest string) error {
@@ -600,9 +635,12 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	var cached struct {
-		Latest      string       `json:"latest"`
-		ReleaseInfo *ReleaseInfo `json:"release_info"`
-		Timestamp   int64        `json:"timestamp"`
+		Latest              string       `json:"latest"`
+		ReleaseInfo         *ReleaseInfo `json:"release_info"`
+		UpstreamLatest      string       `json:"upstream_latest"`
+		UpstreamHasUpdate   bool         `json:"upstream_has_update"`
+		UpstreamReleaseInfo *ReleaseInfo `json:"upstream_release_info"`
+		Timestamp           int64        `json:"timestamp"`
 	}
 	if err := json.Unmarshal([]byte(data), &cached); err != nil {
 		return nil, err
@@ -613,24 +651,34 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	return &UpdateInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  cached.Latest,
-		HasUpdate:      compareVersions(s.currentVersion, cached.Latest) < 0,
-		ReleaseInfo:    cached.ReleaseInfo,
-		Cached:         true,
-		BuildType:      s.buildType,
+		CurrentVersion:        s.currentVersion,
+		LatestVersion:         cached.Latest,
+		HasUpdate:             compareVersions(s.currentVersion, cached.Latest) < 0,
+		ReleaseInfo:           cached.ReleaseInfo,
+		UpstreamLatestVersion: cached.UpstreamLatest,
+		// 缓存写入时的基线比较可能已过期（当前版本后来变了），读缓存时重算
+		UpstreamHasUpdate:   cached.UpstreamLatest != "" && compareUpstreamBaseline(s.currentVersion, cached.UpstreamLatest) < 0,
+		UpstreamReleaseInfo: cached.UpstreamReleaseInfo,
+		Cached:              true,
+		BuildType:           s.buildType,
 	}, nil
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
-		Latest      string       `json:"latest"`
-		ReleaseInfo *ReleaseInfo `json:"release_info"`
-		Timestamp   int64        `json:"timestamp"`
+		Latest              string       `json:"latest"`
+		ReleaseInfo         *ReleaseInfo `json:"release_info"`
+		UpstreamLatest      string       `json:"upstream_latest"`
+		UpstreamHasUpdate   bool         `json:"upstream_has_update"`
+		UpstreamReleaseInfo *ReleaseInfo `json:"upstream_release_info"`
+		Timestamp           int64        `json:"timestamp"`
 	}{
-		Latest:      info.LatestVersion,
-		ReleaseInfo: info.ReleaseInfo,
-		Timestamp:   time.Now().Unix(),
+		Latest:              info.LatestVersion,
+		ReleaseInfo:         info.ReleaseInfo,
+		UpstreamLatest:      info.UpstreamLatestVersion,
+		UpstreamHasUpdate:   info.UpstreamHasUpdate,
+		UpstreamReleaseInfo: info.UpstreamReleaseInfo,
+		Timestamp:           time.Now().Unix(),
 	}
 
 	data, _ := json.Marshal(cacheData)
@@ -649,6 +697,22 @@ func compareVersions(current, latest string) int {
 			return -1
 		}
 		if currentParts[i] > latestParts[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// compareUpstreamBaseline 只比较 X.Y.Z，忽略 -custom.N。
+// 用于判断定制版相对官方上游是否落后（同基线 custom 不算落后）。
+func compareUpstreamBaseline(current, upstream string) int {
+	currentParts := parseVersion(current)
+	upstreamParts := parseVersion(upstream)
+	for i := 0; i < 3; i++ {
+		if currentParts[i] < upstreamParts[i] {
+			return -1
+		}
+		if currentParts[i] > upstreamParts[i] {
 			return 1
 		}
 	}

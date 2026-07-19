@@ -2,7 +2,14 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
-## v0.1.160-custom.1（2026-07-19，当前线上目标版本）
+## v0.1.160-custom.2（2026-07-19，当前线上目标版本）
+
+基于上游 v0.1.160。相对 custom.1 的增量：
+
+- feat：版本徽章展示 **官方上游最新版本**（`Wei-Shaw/sub2api`），落后时天蓝色提醒，并提供官方发布/更新日志入口（仅提示，不驱动本仓库在线更新）
+- 后端 `check-updates` 返回 `upstream_latest_version` / `upstream_has_update` / `upstream_release_info`；基线比较只看 X.Y.Z（同基线 custom 不算落后）
+
+## v0.1.160-custom.1（2026-07-19）
 
 基于上游 v0.1.160。相对 v0.1.156-custom.3 + 上游 0.1.160 合并的增量：
 
