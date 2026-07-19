@@ -2,6 +2,16 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
+## v0.1.161-custom.1（2026-07-19，当前线上目标版本）
+
+基于上游 v0.1.161。首个定制发布，包含此前 0.1.160-custom 全量定制 + 上游 0.1.161：
+
+- merge：上游 v0.1.161（模型级 temp 冷却隔离、池模式 temp 规则、瞬时耗尽 503、Grok 媒体/权限修复、step-up 2FA 开关默认关、会话绑定默认关等）
+- fix：Grok OAuth 429 持续切号（保留，不采用上游 follow-up 一次停切）
+- feat：版本徽章展示官方上游最新版本与发布日志入口
+- fix：SSE 首 ping 推迟、Anthropic message_stop、批量操作 loading
+- 继承：批测/CPA、temp 三次置错、测试成功恢复、Grok 非调度态可测、自有更新源等
+
 ## v0.1.161 合并（2026-07-19，main）
 
 合并上游 `v0.1.161` 到 main。冲突处理要点：
