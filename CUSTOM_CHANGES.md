@@ -2,7 +2,13 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
-## v0.1.160-custom.2（2026-07-19，当前线上目标版本）
+## v0.1.160-custom.3（2026-07-19，当前线上目标版本）
+
+基于上游 v0.1.160。相对 custom.2 的增量：
+
+- fix：恢复 **Grok OAuth 429 持续切号**（合并上游 follow-up 预算后改回合并前语义：429 不停切，直到无可用账号/其它退出条件；OpenAI 仍仅风暴停切）
+
+## v0.1.160-custom.2（2026-07-19）
 
 基于上游 v0.1.160。相对 custom.1 的增量：
 
@@ -93,6 +99,7 @@
 |---|---|
 | grok 免费额度耗尽封 24h | `openai_gateway_grok.go`（`grokFreeUsageWindow` 等常量）、`grok_quota_service.go` |
 | grok 裸 429 指数递增封禁 | `openai_gateway_grok.go`（`grokBare429State`）、`openai_gateway_service.go`（`grokBare429States`） |
+| grok OAuth 429 持续切号（合并上游 follow-up 预算后恢复） | `openai_account_runtime_block_fastpath.go`（`ShouldStopOpenAIOAuth429Failover`：Grok 429 不停切） |
 | 账号批量改到期时间 | `admin_service.go` / `BulkEditAccountModal.vue` |
 | 筛选账号 ID API + 全选 | `routes/admin.go`（`/accounts/ids`）、`AccountsView.vue` |
 | 4 段版本比较 + 自有更新源 | `update_service.go` |

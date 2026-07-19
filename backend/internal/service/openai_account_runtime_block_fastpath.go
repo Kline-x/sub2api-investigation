@@ -18,11 +18,13 @@ const (
 	openAIOAuth429StormMaxAccountSwitches = 1
 )
 
-// OpenAIOAuth429FailoverState tracks the request-local follow-up budget after
-// the first Grok OAuth 429. Once that 429 occurs, exactly one different account
-// may be attempted; any failure from that follow-up account ends failover.
+// OpenAIOAuth429FailoverState is request-local state for OAuth 429 failover.
+// Kept for call-site compatibility. Grok OAuth 429 intentionally does NOT use a
+// one-shot follow-up budget: quota is account-scoped, so keep switching accounts
+// (pre-merge custom behavior from 26734ffd).
 type OpenAIOAuth429FailoverState struct {
-	grokOAuth429FollowupPending bool
+	// reserved for future request-local 429 decisions
+	_ bool
 }
 
 func openAIAccountStateContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -311,27 +313,17 @@ func (s *OpenAIGatewayService) isOpenAIOAuth429Storm() bool {
 }
 
 func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account, statusCode int, failedSwitches int, state *OpenAIOAuth429FailoverState) bool {
-	if failedSwitches < openAIOAuth429StormMaxAccountSwitches {
+	_ = state // request-local state reserved; Grok no longer arms a one-shot follow-up
+	if statusCode != http.StatusTooManyRequests || failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}
-	if state != nil && state.grokOAuth429FollowupPending {
-		// The follow-up budget was armed by a Grok OAuth 429. Consume it on
-		// any failing follow-up account, even if a mixed pool selected an API-key
-		// account next.
-		return true
-	}
+	// Grok free/paid quota is account-scoped: keep switching across accounts on 429
+	// instead of returning 429 to the client after a single switch (custom 26734ffd).
 	if isGrokOAuthAccount(account) {
-		if state == nil {
-			// Preserve the old threshold for callers that have not adopted the
-			// request-local state contract yet.
-			return statusCode == http.StatusTooManyRequests && failedSwitches >= 2
-		}
-		if statusCode == http.StatusTooManyRequests {
-			state.grokOAuth429FollowupPending = true
-		}
 		return false
 	}
-	if statusCode != http.StatusTooManyRequests || !isOpenAIOAuthAccount(account) {
+	// Only stop OpenAI OAuth failover during a global 429 storm to avoid thrashing.
+	if !isOpenAIOAuthAccount(account) {
 		return false
 	}
 	return s.isOpenAIOAuth429Storm()
