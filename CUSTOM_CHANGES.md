@@ -2,7 +2,21 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
-## v0.1.160-custom.3（2026-07-19，当前线上目标版本）
+## v0.1.161 合并（2026-07-19，main）
+
+合并上游 `v0.1.161` 到 main。冲突处理要点：
+
+- README 保留定制版说明（不恢复上游安装文档）
+- VERSION 对齐上游基线 `0.1.161`
+- `AccountHandler` 同时保留本地 `accountTester`（批测/导入流水）与上游 `grokImportProber` 类型
+- `BulkUpdate` 同时保留本地 `ExpiresAtSet` 与上游 `ProbeEnabled`→Extra 写入
+- `AccountsView` 批量探测上游倍率：保留 `runWithBulkBusy` loading，并接入上游 `refreshUpstreamBillingSortedList`
+- **保留 Grok OAuth 429 持续切号**（不采用上游 follow-up 一次停切）
+- 保留 temp 三次置错、测试成功恢复、自有更新源、官方上游版本展示等定制
+
+上游 0.1.161 主要能力：模型级 temp 冷却隔离、池模式 temp 规则、瞬时耗尽 503、Grok 媒体/视频代理与权限修复、step-up 2FA 开关默认关、会话 IP/UA 绑定默认关、Responses 流式 content_part 补全等。
+
+## v0.1.160-custom.3（2026-07-19）
 
 基于上游 v0.1.160。相对 custom.2 的增量：
 
@@ -89,7 +103,7 @@
 - `82a1b8ff` fix：grok 免费额度耗尽封禁 24 小时（`grokFreeUsageWindow`，独有）
 - `4fdd548e`/`3ae7820f` feat：筛选账号 ID 列表 API（`GET /admin/accounts/ids`，独有）
 - `a2bafcb8` feat：按筛选结果全选账号 + token 刷新结果反馈（独有）
-- `26734ffd` fix：grok 429 持续切换账号而非切一次就返回 429（后被上游 followup 预算机制取代）
+- `26734ffd` fix：grok 429 持续切换账号而非切一次就返回 429（上游曾用 followup 预算；**v0.1.160-custom.3 起恢复持续切号**）
 - `d05ef1bb` fix：Claude Code 调工具报 content block not found（Responses→Anthropic 流转换孤儿 delta；上游 v0.1.156 同修）
 - `2be10837` fix：grok 裸 429 连击指数递增封禁，消除 2 分钟兜底抖动（`grokBare429State`，独有，与上游自适应冷却叠加取较晚 reset）
 
