@@ -1442,13 +1442,9 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 			}
 		}
 
-		// Handle errors
-		if errData, ok := data["error"].(map[string]any); ok {
-			errorMsg := "Unknown error"
-			if msg, ok := errData["message"].(string); ok {
-				errorMsg = msg
-			}
-			return s.sendErrorAndEnd(c, errorMsg)
+		// Handle errors (error may be object or string depending on upstream)
+		if _, hasErr := data["error"]; hasErr {
+			return s.sendErrorAndEnd(c, extractTestStreamErrorMessage(data, "Unknown error"))
 		}
 	}
 }
@@ -1543,13 +1539,7 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
 		case "error":
-			errorMsg := "Unknown error"
-			if errData, ok := data["error"].(map[string]any); ok {
-				if msg, ok := errData["message"].(string); ok {
-					errorMsg = msg
-				}
-			}
-			return s.sendErrorAndEnd(c, errorMsg)
+			return s.sendErrorAndEnd(c, extractTestStreamErrorMessage(data, "Unknown error"))
 		}
 	}
 }
@@ -1630,6 +1620,38 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 	}
 }
 
+// extractTestStreamErrorMessage 从上游 SSE/JSON 错误对象中尽量提取可读文案。
+// OpenAI 常见: {"error":{"message":"..."}}
+// Grok/xAI 常见: {"code":"...","error":"..."} 或 {"error":"..."}（error 为字符串）
+func extractTestStreamErrorMessage(data map[string]any, fallback string) string {
+	if data == nil {
+		return fallback
+	}
+	switch errVal := data["error"].(type) {
+	case string:
+		if msg := strings.TrimSpace(errVal); msg != "" {
+			if code, _ := data["code"].(string); strings.TrimSpace(code) != "" {
+				return strings.TrimSpace(code) + ": " + msg
+			}
+			return msg
+		}
+	case map[string]any:
+		if msg, ok := errVal["message"].(string); ok && strings.TrimSpace(msg) != "" {
+			return strings.TrimSpace(msg)
+		}
+		if msg, ok := errVal["error"].(string); ok && strings.TrimSpace(msg) != "" {
+			return strings.TrimSpace(msg)
+		}
+	}
+	if msg, ok := data["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		return strings.TrimSpace(msg)
+	}
+	if code, ok := data["code"].(string); ok && strings.TrimSpace(code) != "" {
+		return strings.TrimSpace(code)
+	}
+	return fallback
+}
+
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
 func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
 	reader := bufio.NewReader(body)
@@ -1689,13 +1711,7 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 			}
 			return s.sendErrorAndEnd(c, errorMsg)
 		case "error":
-			errorMsg := "Unknown error"
-			if errData, ok := data["error"].(map[string]any); ok {
-				if msg, ok := errData["message"].(string); ok {
-					errorMsg = msg
-				}
-			}
-			return s.sendErrorAndEnd(c, errorMsg)
+			return s.sendErrorAndEnd(c, extractTestStreamErrorMessage(data, "Unknown error"))
 		}
 	}
 }
