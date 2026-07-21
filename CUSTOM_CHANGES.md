@@ -2,6 +2,19 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
+## v0.1.162 合并（2026-07-22，main）
+
+合并上游 `v0.1.162` 到 main。冲突处理要点：
+
+- README 保留定制版说明；删除上游恢复的 `README_CN.md` / `README_JA.md`
+- VERSION 对齐上游基线 `0.1.162`
+- Grok 连接测试：采用上游 `GetAccessTokenForManualTest`（覆盖本地 `withAccountConnectionTestPath` 的同类语义，且更完整地绕过调度门）
+- `openai_ws_http_bridge`：采用上游 typed failover / 账号冷却副作用路径（写客户端前切号、Grok/OpenAI 冷却）；不叠加本地 `persistOpenAIWSRateLimitSignal`，避免 OpenAI 限流记两次
+- 前端 `admin.system.rollback` 单测：对齐上游 15 分钟超时参数
+- **保留** Grok OAuth 429 持续切号、temp 三次置错、批测/CPA、自有更新源、官方上游版本展示等定制
+
+上游 0.1.162 主要能力：客户端 IP 解析可配置（可信代理 + 自定义请求头）、异步生图对象存储后台配置、Grok 客户端工具缓存（Claude Desktop/Codex Lite/Trae）、更新检查支持 GitHub Token、订阅到期精确到分钟、OpenAI 配额标准错误、Codex 模型发现兼容标准列表、API Key 部分更新不再清空 IP 名单、提示词审计仅 blocking 时 fail-closed、S3 临时密钥持久化护栏等。
+
 ## v0.1.161-custom.1（2026-07-19，当前线上目标版本）
 
 基于上游 v0.1.161。首个定制发布，包含此前 0.1.160-custom 全量定制 + 上游 0.1.161：

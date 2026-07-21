@@ -735,7 +735,10 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 			return s.sendErrorAndEnd(c, "Grok token provider not configured")
 		}
 		var err error
-		authToken, err = s.grokTokenProvider.GetAccessToken(withAccountConnectionTestPath(ctx), account)
+		// 手动测试不走生产调度资格门：关闭调度、限流/过载/临时冷却中的账号
+		// 也应能被管理员探测（#4598），与 Codex/OpenAI 测试行为一致。
+		// 上游 GetAccessTokenForManualTest 覆盖了本地 withAccountConnectionTestPath 的同类语义。
+		authToken, err = s.grokTokenProvider.GetAccessTokenForManualTest(ctx, account)
 		if err != nil {
 			errMsg := fmt.Sprintf("Failed to get Grok access token: %s", err.Error())
 			// 定制:取 token 失败也视为测试失败 → 临时不可调度(非永久 error)
