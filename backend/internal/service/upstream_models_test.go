@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
 
@@ -214,20 +216,77 @@ func TestBuildUpstreamModelsRequestsForAPIKeyAccounts(t *testing.T) {
 	require.Equal(t, "antigravity-key", antigravityReq.Header.Get("x-api-key"))
 }
 
-func TestBuildUpstreamModelsRequestRejectsGrokOAuth(t *testing.T) {
-	t.Parallel()
-
-	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
-	_, err := svc.buildUpstreamModelsRequest(context.Background(), &Account{
+func validGrokOAuthAccountForModelSync(id int64) *Account {
+	return &Account{
+		ID:       id,
 		Platform: PlatformGrok,
 		Type:     AccountTypeOAuth,
-	})
-	require.Error(t, err)
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"access_token":  "grok-oauth-token",
+			"refresh_token": "refresh",
+			// Far-future expiry avoids refresh path in GrokTokenProvider.
+			"expires_at": time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+}
 
-	var syncErr *UpstreamModelSyncError
-	require.True(t, errors.As(err, &syncErr))
-	require.Equal(t, UpstreamModelSyncErrorUnsupported, syncErr.Kind)
-	require.Contains(t, syncErr.SafeMessage(), "Unsupported Grok account type")
+func TestBuildGrokOAuthUpstreamModelsRequestUsesCLIGateway(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountTestService{
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: &GrokTokenProvider{},
+	}
+	req, err := svc.buildGrokOAuthUpstreamModelsRequest(context.Background(), validGrokOAuthAccountForModelSync(10))
+	require.NoError(t, err)
+	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/models", req.URL.String())
+	require.Equal(t, "Bearer grok-oauth-token", req.Header.Get("Authorization"))
+	require.NotEmpty(t, req.Header.Get("User-Agent"))
+	require.NotEmpty(t, req.Header.Get("X-Grok-Client-Version"))
+}
+
+func TestFetchGrokOAuthUpstreamModelsFallsBackToDefaultsOnUpstreamError(t *testing.T) {
+	t.Parallel()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":"not found"}`)),
+	}}
+	svc := &AccountTestService{
+		httpUpstream:      upstream,
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: &GrokTokenProvider{},
+	}
+
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), validGrokOAuthAccountForModelSync(11))
+	require.NoError(t, err)
+	require.Equal(t, dedupeAndSortModelIDs(xai.DefaultModelIDs()), models)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/models", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer grok-oauth-token", upstream.lastReq.Header.Get("Authorization"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("User-Agent"))
+}
+
+func TestFetchGrokOAuthUpstreamModelsParsesLiveList(t *testing.T) {
+	t.Parallel()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"grok-live-a"},{"id":"grok-live-b"}]}`)),
+	}}
+	svc := &AccountTestService{
+		httpUpstream:      upstream,
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: &GrokTokenProvider{},
+	}
+
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), validGrokOAuthAccountForModelSync(12))
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-live-a", "grok-live-b"}, models)
+	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/models", upstream.lastReq.URL.String())
 }
 
 func TestBuildAntigravityAPIKeyModelsRequestRejectsOfficialCloudCodeBase(t *testing.T) {
