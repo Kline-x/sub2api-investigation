@@ -143,6 +143,12 @@
                         {{ t('admin.accounts.patrol.enabledBadge') }}
                       </span>
                     </button>
+                    <button class="account-tools-menu-item" @click="openAccountPatrolRecords">
+                      <span class="account-tools-menu-icon bg-sky-50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-300">
+                        <Icon name="clock" size="sm" />
+                      </span>
+                      <span class="flex-1 text-left">{{ t('admin.accounts.patrol.openRecords') }}</span>
+                    </button>
 
                     <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
                     <div class="px-2 py-2">
@@ -498,6 +504,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -546,6 +553,7 @@ import type { Account, AccountPlatform, AccountSchedulerGroupScore, AccountType,
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const router = useRouter()
 const authStore = useAuthStore()
 
 const proxies = ref<AccountProxy[]>([])

@@ -342,6 +342,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.GET("/upstream-billing-probe/settings", h.Admin.Account.GetUpstreamBillingProbeSettings)
 		accounts.GET("/patrol/settings", h.Admin.Account.GetAccountPatrolSettings)
 		accounts.PUT("/patrol/settings", h.Admin.Account.UpdateAccountPatrolSettings)
+		accounts.GET("/patrol/records", h.Admin.Account.ListAccountPatrolRecords)
 		accounts.PUT("/upstream-billing-probe/settings", h.Admin.Account.UpdateUpstreamBillingProbeSettings)
 		accounts.POST("/upstream-billing-probe/batch", h.Admin.Account.ProbeUpstreamBillingBatch)
 		accounts.GET("/:id", h.Admin.Account.GetByID)

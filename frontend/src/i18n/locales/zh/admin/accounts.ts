@@ -131,6 +131,18 @@ export default {
       },
       usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
       patrol: {
+    recordsTitle: '账号巡检记录',
+    recordsDescription: '查看定时连接巡检每批结果；失败账号 ID 可在此核对。',
+    recordsStartedAt: '开始时间',
+    recordsFinishedAt: '结束时间',
+    recordsResult: '成功/失败(批次)',
+    recordsCursor: '游标',
+    recordsFailedIds: '失败账号 ID',
+    recordsSettings: '当时参数',
+    recordsSettingsHint: '间隔 {interval} 分钟 · 并发 {concurrency}',
+    recordsLoadFailed: '加载巡检记录失败',
+    openRecords: '巡检记录',
+
     title: '账号巡检',
     description: '开启后定期分批测试全部账号（含 error 状态）；失败直接置错，成功自动恢复。',
     enabled: '启用巡检',

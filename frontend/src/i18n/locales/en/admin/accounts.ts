@@ -175,6 +175,18 @@ export default {
       },
       usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
       patrol: {
+    recordsTitle: 'Account Patrol Records',
+    recordsDescription: 'History of scheduled connectivity patrol batches and failed account IDs.',
+    recordsStartedAt: 'Started',
+    recordsFinishedAt: 'Finished',
+    recordsResult: 'OK/Fail (batch)',
+    recordsCursor: 'Cursor',
+    recordsFailedIds: 'Failed account IDs',
+    recordsSettings: 'Settings',
+    recordsSettingsHint: 'every {interval}m · concurrency {concurrency}',
+    recordsLoadFailed: 'Failed to load patrol records',
+    openRecords: 'Patrol records',
+
     title: 'Account Patrol',
     description: 'When enabled, periodically batch-tests all accounts (including error). Failures become error; successes recover.',
     enabled: 'Enable patrol',

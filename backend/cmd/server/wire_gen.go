@@ -268,7 +268,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogService := service.ProvideAuditLogService(auditLogRepository, settingService)
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
-	accountPatrolService := service.ProvideAccountPatrolService(accountRepository, accountTestService, rateLimitService, settingService, leaderLockCache, db)
+	accountPatrolRecordRepository := repository.NewAccountPatrolRecordRepository(db)
+	accountPatrolService := service.ProvideAccountPatrolService(accountRepository, accountTestService, rateLimitService, settingService, leaderLockCache, db, accountPatrolRecordRepository)
 	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, adminUserHandler, groupHandler, accountHandler, adminAnnouncementHandler, dataManagementHandler, backupHandler, oAuthHandler, openAIOAuthHandler, geminiOAuthHandler, antigravityOAuthHandler, grokOAuthHandler, proxyHandler, adminRedeemHandler, promoHandler, settingHandler, opsHandler, systemHandler, adminSubscriptionHandler, adminUsageHandler, userAttributeHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, adminAPIKeyHandler, scheduledTestHandler, channelHandler, channelMonitorHandler, channelMonitorRequestTemplateHandler, contentModerationHandler, promptAdminHandler, paymentHandler, affiliateHandler, complianceHandler, auditLogHandler, upstreamBillingProbeService,
 		accountPatrolService)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)

@@ -20,7 +20,9 @@
 基于 `custom/v0.1.162`：
 
 - **feat**：Grok 请求错误（非 429）与账号连接测试失败（非 429）**直接 `SetError`**，不再进入临时不可调度
-- **feat**：账号管理「账号巡检」：全局开关 + 间隔/批次/并发；开启后后台分批跑连接测试，失败置错、成功恢复
+- **feat**：账号管理「账号巡检
+- feat：账号巡检记录页（落库每批结果 + 失败账号 ID；菜单「账号巡检记录」；API `GET /admin/accounts/patrol/records`）
+」：全局开关 + 间隔/批次/并发；开启后后台分批跑连接测试，失败置错、成功恢复
 - 位置：`account_test_service.go`、`openai_gateway_grok.go`、`account_patrol_service.go`、账号巡检 API/前端设置弹窗
 
 ## v0.1.161-custom.1（2026-07-19，当前线上目标版本）

@@ -38,6 +38,28 @@ type AccountPatrolSettings struct {
 	Concurrency     int  `json:"concurrency"`
 }
 
+// AccountPatrolRecord is one completed connectivity patrol batch.
+type AccountPatrolRecord struct {
+	ID               int64     `json:"id"`
+	StartedAt        time.Time `json:"started_at"`
+	FinishedAt       time.Time `json:"finished_at"`
+	BatchSize        int       `json:"batch_size"`
+	SuccessCount     int       `json:"success_count"`
+	FailedCount      int       `json:"failed_count"`
+	CursorAfter      int64     `json:"cursor_after"`
+	IntervalMinutes  int       `json:"interval_minutes"`
+	Concurrency      int       `json:"concurrency"`
+	FailedAccountIDs []int64   `json:"failed_account_ids"`
+	Note             string    `json:"note,omitempty"`
+}
+
+// AccountPatrolRecordStore persists patrol cycle history for the admin UI.
+type AccountPatrolRecordStore interface {
+	Create(ctx context.Context, record *AccountPatrolRecord) error
+	List(ctx context.Context, page, pageSize int) ([]AccountPatrolRecord, int64, error)
+	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 func defaultAccountPatrolSettings() *AccountPatrolSettings {
 	return &AccountPatrolSettings{
 		Enabled:         false,
@@ -132,6 +154,7 @@ type AccountPatrolService struct {
 	settingService     *SettingService
 	lockCache          LeaderLockCache
 	db                 *sql.DB
+	recordStore        AccountPatrolRecordStore
 
 	parentCtx    context.Context
 	parentCancel context.CancelFunc
@@ -164,6 +187,13 @@ func NewAccountPatrolService(
 	}
 }
 
+func (s *AccountPatrolService) SetRecordStore(store AccountPatrolRecordStore) {
+	if s == nil {
+		return
+	}
+	s.recordStore = store
+}
+
 func (s *AccountPatrolService) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
 	if s == nil {
 		return
@@ -180,9 +210,11 @@ func ProvideAccountPatrolService(
 	settingService *SettingService,
 	lockCache LeaderLockCache,
 	db *sql.DB,
+	recordStore AccountPatrolRecordStore,
 ) *AccountPatrolService {
 	svc := NewAccountPatrolService(accountRepo, accountTestService, rateLimitService, settingService)
 	svc.SetLeaderLock(lockCache, db)
+	svc.SetRecordStore(recordStore)
 	svc.Start()
 	return svc
 }
@@ -222,6 +254,13 @@ func (s *AccountPatrolService) GetSettings(ctx context.Context) (*AccountPatrolS
 		return defaultAccountPatrolSettings(), nil
 	}
 	return s.settingService.GetAccountPatrolSettings(ctx)
+}
+
+func (s *AccountPatrolService) ListRecords(ctx context.Context, page, pageSize int) ([]AccountPatrolRecord, int64, error) {
+	if s == nil || s.recordStore == nil {
+		return []AccountPatrolRecord{}, 0, nil
+	}
+	return s.recordStore.List(ctx, page, pageSize)
 }
 
 func (s *AccountPatrolService) UpdateSettings(ctx context.Context, settings *AccountPatrolSettings) error {
@@ -275,6 +314,7 @@ func (s *AccountPatrolService) RunDue(ctx context.Context) error {
 	runCtx, cancel := context.WithTimeout(ctx, accountPatrolRunTimeout)
 	defer cancel()
 
+	startedAt := s.now()
 	ids, err := s.nextBatch(runCtx, settings.BatchSize)
 	if err != nil {
 		slog.Warn("account_patrol_list_failed", "error", err)
@@ -287,11 +327,13 @@ func (s *AccountPatrolService) RunDue(ctx context.Context) error {
 		return nil
 	}
 
-	success, failed := s.testBatch(runCtx, ids, settings.Concurrency)
+	success, failed, failedIDs := s.testBatch(runCtx, ids, settings.Concurrency)
+	finishedAt := s.now()
 	s.mu.Lock()
 	if len(ids) > 0 {
 		s.cursor = ids[len(ids)-1]
 	}
+	cursorAfter := s.cursor
 	s.lastCycleAt = now
 	s.mu.Unlock()
 
@@ -299,8 +341,31 @@ func (s *AccountPatrolService) RunDue(ctx context.Context) error {
 		"batch", len(ids),
 		"success", success,
 		"failed", failed,
-		"cursor", s.cursor,
+		"cursor", cursorAfter,
 	)
+
+	if s.recordStore != nil {
+		rec := &AccountPatrolRecord{
+			StartedAt:        startedAt,
+			FinishedAt:       finishedAt,
+			BatchSize:        len(ids),
+			SuccessCount:     success,
+			FailedCount:      failed,
+			CursorAfter:      cursorAfter,
+			IntervalMinutes:  settings.IntervalMinutes,
+			Concurrency:      settings.Concurrency,
+			FailedAccountIDs: failedIDs,
+		}
+		if err := s.recordStore.Create(context.Background(), rec); err != nil {
+			slog.Warn("account_patrol_record_create_failed", "error", err)
+		} else {
+			// Retain ~90 days of history best-effort.
+			cutoff := finishedAt.Add(-90 * 24 * time.Hour)
+			if _, delErr := s.recordStore.DeleteOlderThan(context.Background(), cutoff); delErr != nil {
+				slog.Warn("account_patrol_record_cleanup_failed", "error", delErr)
+			}
+		}
+	}
 	return nil
 }
 
@@ -337,13 +402,14 @@ func (s *AccountPatrolService) nextBatch(ctx context.Context, batchSize int) ([]
 	return lister.ListPatrolAccountIDs(ctx, 0, batchSize)
 }
 
-func (s *AccountPatrolService) testBatch(ctx context.Context, ids []int64, concurrency int) (success, failed int) {
+func (s *AccountPatrolService) testBatch(ctx context.Context, ids []int64, concurrency int) (success, failed int, failedIDs []int64) {
 	if concurrency < 1 {
 		concurrency = accountPatrolDefaultConcurrency
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
 	var mu sync.Mutex
+	failedIDs = make([]int64, 0)
 	for _, id := range ids {
 		accountID := id
 		g.Go(func() error {
@@ -362,11 +428,12 @@ func (s *AccountPatrolService) testBatch(ctx context.Context, ids []int64, concu
 				success++
 			} else {
 				failed++
+				failedIDs = append(failedIDs, accountID)
 			}
 			mu.Unlock()
 			return nil
 		})
 	}
 	_ = g.Wait()
-	return success, failed
+	return success, failed, failedIDs
 }

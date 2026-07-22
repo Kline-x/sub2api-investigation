@@ -966,6 +966,39 @@ export async function updateAccountPatrolSettings(
 }
 
 
+
+export interface AccountPatrolRecord {
+  id: number
+  started_at: string
+  finished_at: string
+  batch_size: number
+  success_count: number
+  failed_count: number
+  cursor_after: number
+  interval_minutes: number
+  concurrency: number
+  failed_account_ids: number[]
+  note?: string
+}
+
+export interface AccountPatrolRecordListResponse {
+  items: AccountPatrolRecord[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export async function listAccountPatrolRecords(params?: {
+  page?: number
+  page_size?: number
+}): Promise<AccountPatrolRecordListResponse> {
+  const { data } = await apiClient.get<AccountPatrolRecordListResponse>('/admin/accounts/patrol/records', {
+    params
+  })
+  return data
+}
+
+
 export async function setUpstreamBillingProbeEnabled(id: number, enabled: boolean): Promise<void> {
   await apiClient.put(`/admin/accounts/${id}/upstream-billing-probe`, { enabled })
 }
@@ -1038,6 +1071,7 @@ export const accountsAPI = {
   updateUpstreamBillingProbeSettings,
   getAccountPatrolSettings,
   updateAccountPatrolSettings,
+  listAccountPatrolRecords,
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch

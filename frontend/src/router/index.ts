@@ -514,6 +514,19 @@ const routes: RouteRecordRaw[] = [
       descriptionKey: 'admin.accounts.description'
     }
   },
+    {
+      path: '/admin/account-patrol-records',
+      name: 'AdminAccountPatrolRecords',
+      component: () => import('@/views/admin/AccountPatrolRecordsView.vue'),
+      meta: {
+        requiresAuth: true,
+        requiresAdmin: true,
+        title: 'Account Patrol Records',
+        titleKey: 'admin.accounts.patrol.recordsTitle',
+        descriptionKey: 'admin.accounts.patrol.recordsDescription'
+      }
+    },
+
   {
     path: '/admin/announcements',
     name: 'AdminAnnouncements',

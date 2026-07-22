@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"strconv"
+
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -49,4 +51,42 @@ func (h *AccountHandler) UpdateAccountPatrolSettings(c *gin.Context) {
 		return
 	}
 	response.Success(c, settings)
+}
+
+func (h *AccountHandler) ListAccountPatrolRecords(c *gin.Context) {
+	if h.accountPatrol == nil {
+		response.Success(c, gin.H{
+			"items":     []any{},
+			"total":     0,
+			"page":      1,
+			"page_size": 20,
+		})
+		return
+	}
+	page := 1
+	pageSize := 20
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := c.Query("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			pageSize = n
+		}
+	}
+	items, total, err := h.accountPatrol.ListRecords(c.Request.Context(), page, pageSize)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if items == nil {
+		items = []service.AccountPatrolRecord{}
+	}
+	response.Success(c, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
