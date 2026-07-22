@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 const upstreamModelsBodyLimit int64 = 8 << 20
@@ -85,6 +86,12 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
 	}
 
+	// Grok OAuth: try live /models on the pinned CLI gateway; fall back to the
+	// built-in default model list when the gateway has no models endpoint.
+	if account.IsGrokOAuth() {
+		return s.fetchGrokOAuthUpstreamModels(ctx, account)
+	}
+
 	if s.httpUpstream == nil {
 		return nil, newUpstreamModelSyncConfigError("Upstream HTTP client is not configured", nil)
 	}
@@ -147,11 +154,19 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 }
 
 func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
-	if account.Type != AccountTypeAPIKey {
+	switch account.Type {
+	case AccountTypeAPIKey:
+		return s.buildGrokAPIKeyUpstreamModelsRequest(ctx, account)
+	case AccountTypeOAuth:
+		return s.buildGrokOAuthUpstreamModelsRequest(ctx, account)
+	default:
 		return nil, newUpstreamModelSyncUnsupportedError(
 			fmt.Sprintf("Unsupported Grok account type for upstream model sync: %s", account.Type), nil,
 		)
 	}
+}
+
+func (s *AccountTestService) buildGrokAPIKeyUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	apiKey := strings.TrimSpace(account.GetCredential("api_key"))
 	if apiKey == "" {
 		return nil, newUpstreamModelSyncConfigError("No Grok API key is available", nil)
@@ -174,6 +189,80 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
+}
+
+// buildGrokOAuthUpstreamModelsRequest builds a GET /models request against the
+// pinned Grok CLI gateway using a refreshed OAuth access token.
+func (s *AccountTestService) buildGrokOAuthUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	if s.grokTokenProvider == nil {
+		return nil, newUpstreamModelSyncConfigError("Grok token provider is not configured", nil)
+	}
+
+	accessToken, err := s.grokTokenProvider.GetAccessToken(withAccountConnectionTestPath(ctx), account)
+	if err != nil {
+		return nil, newUpstreamModelSyncUpstreamError("Failed to get Grok access token", err)
+	}
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return nil, newUpstreamModelSyncConfigError("No Grok access token is available", nil)
+	}
+
+	// OAuth credentials are pinned to the supported CLI gateway; never use a
+	// stored custom base_url here.
+	baseURL := strings.TrimSpace(account.GetGrokBaseURL())
+	if baseURL == "" {
+		baseURL = xai.DefaultCLIBaseURL
+	}
+	modelsURL := buildOpenAIModelsURL(baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Grok model list URL", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	applyGrokCLIHeaders(req.Header)
+	account.ApplyHeaderOverrides(req.Header)
+	return req, nil
+}
+
+// fetchGrokOAuthUpstreamModels tries the live CLI /models endpoint. When the
+// gateway does not expose models listing (404/405/empty), fall back to the
+// built-in xAI default model IDs so OAuth accounts can still populate mapping.
+func (s *AccountTestService) fetchGrokOAuthUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
+	if s.httpUpstream == nil {
+		return dedupeAndSortModelIDs(xai.DefaultModelIDs()), nil
+	}
+
+	req, err := s.buildGrokOAuthUpstreamModelsRequest(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+
+	proxyURL := upstreamModelsProxyURL(account)
+	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
+	if err != nil {
+		return dedupeAndSortModelIDs(xai.DefaultModelIDs()), nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, upstreamModelsBodyLimit+1))
+	if err != nil {
+		return dedupeAndSortModelIDs(xai.DefaultModelIDs()), nil
+	}
+	if int64(len(body)) > upstreamModelsBodyLimit {
+		return dedupeAndSortModelIDs(xai.DefaultModelIDs()), nil
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return dedupeAndSortModelIDs(xai.DefaultModelIDs()), nil
+	}
+
+	models, err := extractUpstreamModelIDs(body)
+	if err != nil || len(models) == 0 {
+		return dedupeAndSortModelIDs(xai.DefaultModelIDs()), nil
+	}
+	return models, nil
 }
 
 func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
