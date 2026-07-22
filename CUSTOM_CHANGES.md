@@ -15,17 +15,18 @@
 
 上游 0.1.162 主要能力：客户端 IP 解析可配置（可信代理 + 自定义请求头）、异步生图对象存储后台配置、Grok 客户端工具缓存（Claude Desktop/Codex Lite/Trae）、更新检查支持 GitHub Token、订阅到期精确到分钟、OpenAI 配额标准错误、Codex 模型发现兼容标准列表、API Key 部分更新不再清空 IP 名单、提示词审计仅 blocking 时 fail-closed、S3 临时密钥持久化护栏等。
 
-## v0.1.162-custom.N（开发中，codex/account-patrol-direct-error）
+## v0.1.162-custom.1（2026-07-22，当前线上目标版本）
 
-基于 `custom/v0.1.162`：
+基于上游 v0.1.162 的首个定制发布（合入 codex/account-patrol-direct-error）：
 
-- **feat**：Grok 请求错误（非 429）与账号连接测试失败（非 429）**直接 `SetError`**，不再进入临时不可调度
-- **feat**：账号管理「账号巡检
-- feat：账号巡检记录页（落库每批结果 + 失败账号 ID；菜单「账号巡检记录」；API `GET /admin/accounts/patrol/records`）
-」：全局开关 + 间隔/批次/并发；开启后后台分批跑连接测试，失败置错、成功恢复
-- 位置：`account_test_service.go`、`openai_gateway_grok.go`、`account_patrol_service.go`、账号巡检 API/前端设置弹窗
+- **feat**：Grok 请求错误（非 429）与账号连接测试失败（非 429）直接 SetError，不再进入临时不可调度
+- **feat**：账号巡检（全局开关 + 间隔/批次/并发；分批连接测试，失败置错、成功恢复）
+- **feat**：账号巡检记录页（落库每批结果 + 失败账号 ID；保留 7 天；支持单条删除/清空全部）
+- **feat**：Grok OAuth 支持同步上游模型（CLI /models，失败回退默认列表）
+- **fix**：批量更新有勾选时仅改选中账号，避免误点「按筛选」更新全表
+- **继承**：Grok OAuth 429 持续切号、temp 三次置错、批测/CPA、自有更新源等既有定制
 
-## v0.1.161-custom.1（2026-07-19，当前线上目标版本）
+## v0.1.161-custom.1（2026-07-19）
 
 基于上游 v0.1.161。首个定制发布，包含此前 0.1.160-custom 全量定制 + 上游 0.1.161：
 
