@@ -405,8 +405,8 @@ func TestAccountTestService_OpenAI429WithoutResetSignalDoesNotMutateRuntimeState
 	require.Nil(t, account.RateLimitResetAt)
 }
 
-func TestAccountTestService_OpenAI401SetsTempUnschedulableOnly(t *testing.T) {
-	// 定制:测试路径 HTTP 401 不再永久 SetError,统一临时不可调度;永久 error 由管理员手动置错。
+func TestAccountTestService_OpenAI401SetsError(t *testing.T) {
+	// 定制:测试路径 HTTP 401/非429 失败直接永久 SetError。
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
 
@@ -426,13 +426,14 @@ func TestAccountTestService_OpenAI401SetsTempUnschedulableOnly(t *testing.T) {
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
-	require.Zero(t, repo.setErrorID)
-	require.Equal(t, account.ID, repo.tempUnschedID)
-	require.Contains(t, repo.tempUnschedReason, "API returned 401")
+	require.Equal(t, account.ID, repo.setErrorID)
+	require.Contains(t, repo.setErrorMsg, "API returned 401")
+	require.Zero(t, repo.tempUnschedID)
 	require.Zero(t, repo.rateLimitedID)
 	require.Zero(t, repo.clearedErrorID)
 	require.Nil(t, account.RateLimitResetAt)
 }
+
 
 func TestAccountTestService_OpenAIAPIKeyResponsesUnsupportedUsesChatCompletionsPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -487,7 +487,8 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		router.ServeHTTP(recorder, req)
 
 		require.Equal(t, []int64{801}, upstream.accountHits())
-		require.Empty(t, repo.errorIDs())
+		// 402 payment-required now permanently errors the Grok account (non-429 policy).
+		require.Equal(t, []int64{801}, repo.errorIDs())
 		require.Equal(t, 1, repo.selectorCalls())
 		require.Zero(t, h.gatewayService.SnapshotOpenAIAccountSchedulerMetrics().RuntimeStatsAccountCount)
 	})

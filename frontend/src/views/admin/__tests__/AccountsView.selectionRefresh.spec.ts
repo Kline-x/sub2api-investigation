@@ -26,6 +26,7 @@ const {
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
+      getAccountPatrolSettings: vi.fn().mockResolvedValue({ enabled: false, interval_minutes: 30, batch_size: 20, concurrency: 4 }),
       list: listAccounts,
       listWithEtag: vi.fn().mockResolvedValue({ notModified: true, etag: null, data: null }),
       listIDs,

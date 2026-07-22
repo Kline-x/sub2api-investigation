@@ -8,6 +8,7 @@ const {
   listWithEtag,
   getBatchTodayStats,
   getUpstreamBillingProbeSettings,
+  getAccountPatrolSettings,
   getAllProxies,
   getAllGroups,
   probeUpstreamBillingBatch
@@ -16,6 +17,7 @@ const {
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getUpstreamBillingProbeSettings: vi.fn(),
+  getAccountPatrolSettings: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
   probeUpstreamBillingBatch: vi.fn()
@@ -109,6 +111,7 @@ describe('admin AccountsView bulk edit scope', () => {
     listWithEtag.mockReset()
     getBatchTodayStats.mockReset()
     getUpstreamBillingProbeSettings.mockReset()
+  getAccountPatrolSettings.mockReset()
     getAllProxies.mockReset()
     getAllGroups.mockReset()
     probeUpstreamBillingBatch.mockReset()
@@ -127,6 +130,7 @@ describe('admin AccountsView bulk edit scope', () => {
     })
     getBatchTodayStats.mockResolvedValue({ stats: {} })
     getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
+  getAccountPatrolSettings.mockResolvedValue({ enabled: false, interval_minutes: 30, batch_size: 20, concurrency: 4 })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
     probeUpstreamBillingBatch.mockResolvedValue([])
@@ -266,6 +270,7 @@ describe('admin AccountsView bulk edit scope', () => {
       pages: 1
     })
     getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: false, interval_minutes: 30 })
+  getAccountPatrolSettings.mockResolvedValue({ enabled: false, interval_minutes: 30, batch_size: 20, concurrency: 4 })
 
     const wrapper = mount(AccountsView, {
       global: {

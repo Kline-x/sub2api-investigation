@@ -54,6 +54,11 @@ func (r *snapshotUpdateAccountRepo) SetTempUnschedulable(ctx context.Context, id
 	return nil
 }
 
+// SetError no-op: account test failures now mark permanent error instead of temp unsched.
+func (r *snapshotUpdateAccountRepo) SetError(ctx context.Context, id int64, errorMsg string) error {
+	return nil
+}
+
 func (r stubOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
 	for i := range r.accounts {
 		if r.accounts[i].ID == id {

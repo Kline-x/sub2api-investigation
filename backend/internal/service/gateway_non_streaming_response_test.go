@@ -30,6 +30,10 @@ func (r *nonJSONTempUnschedAccountRepo) SetTempUnschedulable(_ context.Context, 
 	return nil
 }
 
+func (r *nonJSONTempUnschedAccountRepo) SetError(_ context.Context, _ int64, _ string) error {
+	return nil
+}
+
 func (r *nonJSONTempUnschedAccountRepo) SetModelRateLimit(_ context.Context, _ int64, scope string, _ time.Time, reason ...string) error {
 	r.modelRateLimitCalls++
 	r.modelScope = scope

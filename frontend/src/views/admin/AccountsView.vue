@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <AppLayout>
     <TablePageLayout>
       <template #filters>
@@ -133,7 +133,7 @@
                     </button>
                     <button class="account-tools-menu-item" @click="openAccountPatrolSettings">
                       <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
-                        <Icon name="activity" size="sm" />
+                        <Icon name="sync" size="sm" />
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.accounts.patrol.open') }}</span>
                       <span
