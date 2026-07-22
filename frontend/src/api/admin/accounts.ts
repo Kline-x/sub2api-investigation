@@ -999,6 +999,17 @@ export async function listAccountPatrolRecords(params?: {
 }
 
 
+
+export async function deleteAccountPatrolRecord(id: number): Promise<void> {
+  await apiClient.delete(`/admin/accounts/patrol/records/${id}`)
+}
+
+export async function deleteAllAccountPatrolRecords(): Promise<{ deleted: number }> {
+  const { data } = await apiClient.delete<{ deleted: number }>('/admin/accounts/patrol/records')
+  return data
+}
+
+
 export async function setUpstreamBillingProbeEnabled(id: number, enabled: boolean): Promise<void> {
   await apiClient.put(`/admin/accounts/${id}/upstream-billing-probe`, { enabled })
 }
@@ -1072,6 +1083,8 @@ export const accountsAPI = {
   getAccountPatrolSettings,
   updateAccountPatrolSettings,
   listAccountPatrolRecords,
+  deleteAccountPatrolRecord,
+  deleteAllAccountPatrolRecords,
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch

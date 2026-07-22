@@ -11,10 +11,21 @@
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.patrol.recordsDescription') }}
               </p>
+              <p class="mt-1 text-xs text-gray-400">
+                {{ t('admin.accounts.patrol.recordsRetentionHint') }}
+              </p>
             </div>
             <div class="flex flex-wrap items-center gap-3">
               <button type="button" class="btn btn-secondary" :disabled="loading" @click="load">
                 {{ t('common.refresh') }}
+              </button>
+              <button
+                type="button"
+                class="btn btn-danger"
+                :disabled="loading || total === 0"
+                @click="clearAll"
+              >
+                {{ t('admin.accounts.patrol.recordsClearAll') }}
               </button>
               <button type="button" class="btn btn-primary" @click="openSettings">
                 {{ t('admin.accounts.patrol.open') }}
@@ -55,6 +66,16 @@
                 concurrency: row.concurrency
               }) }}
             </span>
+          </template>
+          <template #cell-actions="{ row }">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="deletingId === row.id"
+              @click="removeOne(row.id)"
+            >
+              {{ t('admin.accounts.patrol.recordsDelete') }}
+            </button>
           </template>
         </DataTable>
       </template>
@@ -97,6 +118,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const loading = ref(false)
+const deletingId = ref<number | null>(null)
 const records = ref<AccountPatrolRecord[]>([])
 const page = ref(1)
 const pageSize = ref(20)
@@ -110,7 +132,8 @@ const columns = computed<Column[]>(() => [
   { key: 'result', label: t('admin.accounts.patrol.recordsResult') },
   { key: 'cursor_after', label: t('admin.accounts.patrol.recordsCursor') },
   { key: 'failed_account_ids', label: t('admin.accounts.patrol.recordsFailedIds') },
-  { key: 'settings', label: t('admin.accounts.patrol.recordsSettings') }
+  { key: 'settings', label: t('admin.accounts.patrol.recordsSettings') },
+  { key: 'actions', label: t('common.actions'), width: '100px' }
 ])
 
 function formatTime(value: string) {
@@ -156,6 +179,38 @@ function handlePageSizeChange(ps: number) {
   pageSize.value = ps
   page.value = 1
   void load()
+}
+
+async function removeOne(id: number) {
+  if (!confirm(t('admin.accounts.patrol.recordsDeleteConfirm'))) return
+  deletingId.value = id
+  try {
+    await adminAPI.accounts.deleteAccountPatrolRecord(id)
+    appStore.showSuccess(t('admin.accounts.patrol.recordsDeleted'))
+    if (records.value.length <= 1 && page.value > 1) {
+      page.value -= 1
+    }
+    await load()
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.patrol.recordsDeleteFailed')))
+  } finally {
+    deletingId.value = null
+  }
+}
+
+async function clearAll() {
+  if (!confirm(t('admin.accounts.patrol.recordsClearAllConfirm'))) return
+  loading.value = true
+  try {
+    const res = await adminAPI.accounts.deleteAllAccountPatrolRecords()
+    appStore.showSuccess(t('admin.accounts.patrol.recordsCleared', { count: res.deleted ?? 0 }))
+    page.value = 1
+    await load()
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.patrol.recordsDeleteFailed')))
+  } finally {
+    loading.value = false
+  }
 }
 
 onMounted(() => {

@@ -109,6 +109,32 @@ func (r *AccountPatrolRecordRepository) List(ctx context.Context, page, pageSize
 	return items, total, rows.Err()
 }
 
+func (r *AccountPatrolRecordRepository) DeleteByID(ctx context.Context, id int64) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("account patrol record repository unavailable")
+	}
+	res, err := r.db.ExecContext(ctx, `DELETE FROM account_patrol_records WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("patrol record not found")
+	}
+	return nil
+}
+
+func (r *AccountPatrolRecordRepository) DeleteAll(ctx context.Context) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("account patrol record repository unavailable")
+	}
+	res, err := r.db.ExecContext(ctx, `DELETE FROM account_patrol_records`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // DeleteOlderThan removes patrol history older than cutoff (best-effort retention).
 func (r *AccountPatrolRecordRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	if r == nil || r.db == nil {

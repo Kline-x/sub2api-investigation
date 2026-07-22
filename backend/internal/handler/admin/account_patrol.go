@@ -90,3 +90,33 @@ func (h *AccountHandler) ListAccountPatrolRecords(c *gin.Context) {
 		"page_size": pageSize,
 	})
 }
+
+func (h *AccountHandler) DeleteAccountPatrolRecord(c *gin.Context) {
+	if h.accountPatrol == nil {
+		response.BadRequest(c, "account patrol service unavailable")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "invalid record id")
+		return
+	}
+	if err := h.accountPatrol.DeleteRecord(c.Request.Context(), id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "deleted"})
+}
+
+func (h *AccountHandler) DeleteAllAccountPatrolRecords(c *gin.Context) {
+	if h.accountPatrol == nil {
+		response.BadRequest(c, "account patrol service unavailable")
+		return
+	}
+	n, err := h.accountPatrol.DeleteAllRecords(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"deleted": n})
+}

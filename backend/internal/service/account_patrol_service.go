@@ -26,6 +26,7 @@ const (
 	accountPatrolMaxConcurrency         = 20
 	accountPatrolCycleInterval          = time.Minute
 	accountPatrolRunTimeout             = 8 * time.Minute
+	accountPatrolRecordRetention        = 7 * 24 * time.Hour
 	accountPatrolLeaderLockKey          = "account:patrol:leader"
 	accountPatrolLeaderLockTTL          = 2 * time.Minute
 )
@@ -57,6 +58,8 @@ type AccountPatrolRecord struct {
 type AccountPatrolRecordStore interface {
 	Create(ctx context.Context, record *AccountPatrolRecord) error
 	List(ctx context.Context, page, pageSize int) ([]AccountPatrolRecord, int64, error)
+	DeleteByID(ctx context.Context, id int64) error
+	DeleteAll(ctx context.Context) (int64, error)
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
@@ -256,6 +259,23 @@ func (s *AccountPatrolService) GetSettings(ctx context.Context) (*AccountPatrolS
 	return s.settingService.GetAccountPatrolSettings(ctx)
 }
 
+func (s *AccountPatrolService) DeleteRecord(ctx context.Context, id int64) error {
+	if s == nil || s.recordStore == nil {
+		return fmt.Errorf("account patrol record store unavailable")
+	}
+	if id <= 0 {
+		return fmt.Errorf("invalid record id")
+	}
+	return s.recordStore.DeleteByID(ctx, id)
+}
+
+func (s *AccountPatrolService) DeleteAllRecords(ctx context.Context) (int64, error) {
+	if s == nil || s.recordStore == nil {
+		return 0, fmt.Errorf("account patrol record store unavailable")
+	}
+	return s.recordStore.DeleteAll(ctx)
+}
+
 func (s *AccountPatrolService) ListRecords(ctx context.Context, page, pageSize int) ([]AccountPatrolRecord, int64, error) {
 	if s == nil || s.recordStore == nil {
 		return []AccountPatrolRecord{}, 0, nil
@@ -359,8 +379,8 @@ func (s *AccountPatrolService) RunDue(ctx context.Context) error {
 		if err := s.recordStore.Create(context.Background(), rec); err != nil {
 			slog.Warn("account_patrol_record_create_failed", "error", err)
 		} else {
-			// Retain ~90 days of history best-effort.
-			cutoff := finishedAt.Add(-90 * 24 * time.Hour)
+			// Retain ~7 days of history best-effort.
+			cutoff := finishedAt.Add(-accountPatrolRecordRetention)
 			if _, delErr := s.recordStore.DeleteOlderThan(context.Background(), cutoff); delErr != nil {
 				slog.Warn("account_patrol_record_cleanup_failed", "error", delErr)
 			}
