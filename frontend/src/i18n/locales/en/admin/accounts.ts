@@ -360,6 +360,7 @@ export default {
         selectAllFailed: 'Failed to select matching accounts',
         clear: 'Clear selection',
         edit: 'Bulk Edit',
+        editFiltered: 'Bulk edit by filters ({count})',
         delete: 'Bulk Delete',
         enableScheduling: 'Enable Scheduling',
         disableScheduling: 'Disable Scheduling',
@@ -393,6 +394,8 @@ export default {
         title: 'Bulk Edit Accounts',
         selectionInfo:
           '{count} account(s) selected. Only checked or filled fields will be updated; others stay unchanged.',
+        filteredSelectionInfo:
+          'This will update all {count} accounts matching the current filters. Only checked/filled fields are changed.',
         baseUrlPlaceholder: 'https://api.anthropic.com or https://api.openai.com',
         baseUrlNotice: 'Applies to API Key accounts and the forwarding endpoint of Grok OAuth accounts; leave empty to keep existing value',
         submit: 'Update Accounts',

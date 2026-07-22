@@ -17,7 +17,7 @@
               d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
             />
           </svg>
-          {{ t('admin.accounts.bulkEdit.selectionInfo', { count: targetMode === 'filtered' ? targetPreviewCount : accountIds.length }) }}
+          {{ t(targetMode === 'filtered' ? 'admin.accounts.bulkEdit.filteredSelectionInfo' : 'admin.accounts.bulkEdit.selectionInfo', { count: targetPreviewCount }) }}
         </p>
       </div>
 
@@ -1319,6 +1319,7 @@ interface Props {
   selectedTypes: AccountType[]
   target?: {
     mode: 'selected' | 'filtered'
+    accountIds?: number[]
     filters?: Record<string, unknown>
     previewCount?: number
     selectedPlatforms?: AccountPlatform[]
@@ -1339,7 +1340,20 @@ const appStore = useAppStore()
 
 // Platform awareness
 const targetMode = computed(() => props.target?.mode ?? 'selected')
-const targetPreviewCount = computed(() => props.target?.previewCount ?? props.accountIds.length)
+// Prefer the account ID snapshot frozen when the modal opens.
+const effectiveAccountIds = computed(() => {
+  const fromTarget = props.target?.accountIds
+  if (Array.isArray(fromTarget) && fromTarget.length > 0) {
+    return fromTarget
+  }
+  return props.accountIds ?? []
+})
+const targetPreviewCount = computed(() => {
+  if (targetMode.value === 'filtered') {
+    return props.target?.previewCount ?? 0
+  }
+  return effectiveAccountIds.value.length
+})
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
 // Grok 快捷端点仅在所选账号全部为 grok 平台时展示（其他平台不显示）
@@ -1844,7 +1858,7 @@ const preCheckMixedChannelRisk = async (built: Record<string, unknown>): Promise
 }
 
 const handleSubmit = async () => {
-  if (targetMode.value === 'selected' && props.accountIds.length === 0) {
+  if (targetMode.value === 'selected' && effectiveAccountIds.value.length === 0) {
     appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
     return
   }
@@ -1934,7 +1948,7 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
         filters: props.target.filters,
         ...updates
       })
-      : await adminAPI.accounts.bulkUpdate(props.accountIds, updates)
+      : await adminAPI.accounts.bulkUpdate(effectiveAccountIds.value, updates)
     const success = res.success || 0
     const failed = res.failed || 0
 

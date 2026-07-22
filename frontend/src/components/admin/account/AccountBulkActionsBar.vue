@@ -73,12 +73,19 @@
         <button class="btn btn-warning btn-sm" :disabled="busy" @click="$emit('toggle-schedulable', false)">
           {{ t('admin.accounts.bulkActions.disableScheduling') }}
         </button>
+        <!-- 有勾选时只编辑已选账号，避免误点「按筛选更新」改到全表 -->
         <button class="btn btn-primary btn-sm" :disabled="busy" @click="$emit('edit-selected')">
           {{ t('admin.accounts.bulkActions.edit') }}
         </button>
       </template>
-      <button class="btn btn-primary btn-sm" :disabled="busy" @click="$emit('edit-filtered')">
-        {{ t('admin.accounts.bulkEdit.submit') }}
+      <!-- 无勾选时才提供按筛选条件批量编辑；有勾选时隐藏，防止误更新全部 -->
+      <button
+        v-else
+        class="btn btn-primary btn-sm"
+        :disabled="busy || filteredTotal <= 0"
+        @click="$emit('edit-filtered')"
+      >
+        {{ t('admin.accounts.bulkActions.editFiltered', { count: filteredTotal }) }}
       </button>
     </div>
   </div>

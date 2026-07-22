@@ -1102,6 +1102,19 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 	if filters == nil {
 		return nil, nil
 	}
+	// Prevent accidental full-table updates when the UI sends empty filters.
+	// Require at least one restricting filter; otherwise callers must pass account_ids.
+	if strings.TrimSpace(filters.Platform) == "" &&
+		strings.TrimSpace(filters.Type) == "" &&
+		strings.TrimSpace(filters.Status) == "" &&
+		strings.TrimSpace(filters.Group) == "" &&
+		strings.TrimSpace(filters.Search) == "" &&
+		strings.TrimSpace(filters.PrivacyMode) == "" {
+		return nil, infraerrors.BadRequest(
+			"BULK_UPDATE_FILTERS_REQUIRED",
+			"filter-based bulk update requires at least one filter; pass account_ids to update specific accounts",
+		)
+	}
 
 	groupID := int64(0)
 	switch strings.TrimSpace(filters.Group) {

@@ -286,3 +286,17 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	require.Equal(t, 0, result.Failed)
 	require.Equal(t, []int64{7, 11}, result.SuccessIDs)
 }
+
+
+func TestAdminServiceBulkUpdateAccounts_EmptyFiltersRejected(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{}
+	svc := &adminServiceImpl{accountRepo: repo}
+	schedulable := true
+	_, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		Filters:     &BulkUpdateAccountFilters{},
+		Schedulable: &schedulable,
+	})
+	require.Error(t, err)
+	require.False(t, repo.listCalled, "empty filters must not list all accounts")
+}
+
