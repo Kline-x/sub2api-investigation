@@ -43,9 +43,9 @@
             </span>
           </template>
           <template #cell-failed_account_ids="{ value }">
-            <span v-if="!value || value.length === 0" class="text-gray-400">—</span>
+            <span v-if="!value || value.length === 0" class="text-gray-400">-</span>
             <span v-else class="break-all text-xs text-red-600 dark:text-red-400" :title="value.join(', ')">
-              {{ value.slice(0, 12).join(', ') }}<span v-if="value.length > 12">…</span>
+              {{ value.slice(0, 12).join(', ') }}<span v-if="value.length > 12">...</span>
             </span>
           </template>
           <template #cell-settings="{ row }">
@@ -65,8 +65,8 @@
           :total="total"
           :page="page"
           :page-size="pageSize"
-          @update:page="onPageChange"
-          @update:pageSize="onPageSizeChange"
+          @update:page="handlePageChange"
+          @update:pageSize="handlePageSizeChange"
         />
       </template>
     </TablePageLayout>
@@ -113,14 +113,14 @@ const columns = computed<Column[]>(() => [
   { key: 'settings', label: t('admin.accounts.patrol.recordsSettings') }
 ])
 
-const formatTime = (value: string) => {
-  if (!value) return '—'
+function formatTime(value: string) {
+  if (!value) return '-'
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return value
   return d.toLocaleString()
 }
 
-const load = async () => {
+async function load() {
   loading.value = true
   try {
     const res = await adminAPI.accounts.listAccountPatrolRecords({
@@ -138,14 +138,27 @@ const load = async () => {
   }
 }
 
-const openSettings = () => {
+function openSettings() {
   showSettings.value = true
 }
 
-const onSettingsUpdated = () => {
+function onSettingsUpdated() {
   showSettings.value = false
-  load()
+  void load()
 }
 
-onMounted(load)
+function handlePageChange(p: number) {
+  page.value = p
+  void load()
+}
+
+function handlePageSizeChange(ps: number) {
+  pageSize.value = ps
+  page.value = 1
+  void load()
+}
+
+onMounted(() => {
+  void load()
+})
 </script>
