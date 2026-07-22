@@ -1314,6 +1314,11 @@ const openAccountPatrolSettings = () => {
   showAccountPatrolSettings.value = true
 }
 
+const openAccountPatrolRecords = () => {
+  showAccountToolsDropdown.value = false
+  router.push({ name: 'AdminAccountPatrolRecords' })
+}
+
 const handleAccountPatrolUpdated = (settings: { enabled?: boolean }) => {
   accountPatrolEnabled.value = !!settings?.enabled
 }
