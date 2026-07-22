@@ -15,6 +15,14 @@
 
 上游 0.1.162 主要能力：客户端 IP 解析可配置（可信代理 + 自定义请求头）、异步生图对象存储后台配置、Grok 客户端工具缓存（Claude Desktop/Codex Lite/Trae）、更新检查支持 GitHub Token、订阅到期精确到分钟、OpenAI 配额标准错误、Codex 模型发现兼容标准列表、API Key 部分更新不再清空 IP 名单、提示词审计仅 blocking 时 fail-closed、S3 临时密钥持久化护栏等。
 
+## v0.1.162-custom.N（开发中，codex/account-patrol-direct-error）
+
+基于 `custom/v0.1.162`：
+
+- **feat**：Grok 请求错误（非 429）与账号连接测试失败（非 429）**直接 `SetError`**，不再进入临时不可调度
+- **feat**：账号管理「账号巡检」：全局开关 + 间隔/批次/并发；开启后后台分批跑连接测试，失败置错、成功恢复
+- 位置：`account_test_service.go`、`openai_gateway_grok.go`、`account_patrol_service.go`、账号巡检 API/前端设置弹窗
+
 ## v0.1.161-custom.1（2026-07-19，当前线上目标版本）
 
 基于上游 v0.1.161。首个定制发布，包含此前 0.1.160-custom 全量定制 + 上游 0.1.161：
@@ -143,7 +151,8 @@
 | 发布流水线定制 | `.goreleaser.simple.yaml` |
 | 自有仓库引用 | `VersionBadge.vue` 常量、`deploy/install.sh` `GITHUB_REPO` |
 | 账号批量测试端点（POST `/accounts/batch-test`，`models_by_platform` 按平台选模型） | `handler/admin/account_handler.go`（`BatchTest`）、`routes/admin.go`、前端 `AccountsView.vue` / `AccountBulkActionsBar.vue` / `BatchTestConfirmModal.vue` / `accounts.ts` |
-| 测试失败临时不可调度 + 手动置错（HTTP 错误/取 token 失败→temp unsched；永久 error 由管理员手动/批量 set-error） | `service/account_test_service.go`、`handler/admin/account_handler.go`（`SetError`/`BatchSetError`）、`routes/admin.go`、前端账号操作菜单与批量栏 |
+| 测试失败/Grok 非429请求错误直接置错 + 手动置错（HTTP 错误/取 token 失败→SetError；429 仍限流；永久 error 亦可管理员手动/批量 set-error） | `service/account_test_service.go`、`handler/admin/account_handler.go`（`SetError`/`BatchSetError`）、`routes/admin.go`、前端账号操作菜单与批量栏 |
+| **账号巡检**（全局开关；定期分批连接测试；失败 SetError；成功 Recover） | `service/account_patrol_service.go`、`handler/admin/account_patrol.go`、`routes/admin.go`、前端 `AccountPatrolSettingsModal.vue` / `AccountsView.vue` |
 | **temp 累计 3 次自动置错**（任意入口真正 re-entry 计次；窗口延长不计；达 3 次 → SetError + 清 temp） | `service/temp_unsched_entry_counter.go`、`repository/temp_unsched_entry_counter_cache.go`、`repository/account_repo.go`（`SetTempUnschedulable` / Grok CAS 路径挂钩） |
 | **测试/恢复成功 → 完全正常**（ClearError + 强制 `schedulable=true` + 清 temp re-entry 计数） | `service/ratelimit_service.go`（`RecoverAccountState` / `RecoverAccountAfterSuccessfulTest`） |
 | **Grok 连接测试允许非调度态取 token**（error/暂停/temp 可测；网关路径仍要求可调度） | `service/grok_token_provider.go`（`GetAccessTokenForManualTest`，v0.1.162 起采用上游接口；`withAccountConnectionTestPath` 仍保留给其它路径）、`oauth_refresh_api.go`、`account_test_service.go` |

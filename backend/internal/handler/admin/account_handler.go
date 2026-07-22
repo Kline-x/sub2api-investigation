@@ -70,6 +70,7 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	accountTester           backgroundAccountTester
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
+	accountPatrol           *service.AccountPatrolService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -1545,7 +1546,7 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
-// SetError handles manually marking an account as error (定制:测试失败只做临时不可调度,永久错误由管理员手动确认)
+// SetError handles manually marking an account as error (定制:测试失败/Grok 非429请求错误现已直接置错;本接口供管理员手动确认置错)
 // POST /api/v1/admin/accounts/:id/set-error
 func (h *AccountHandler) SetError(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)

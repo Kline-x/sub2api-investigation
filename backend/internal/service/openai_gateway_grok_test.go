@@ -2346,35 +2346,27 @@ func grokMessagesSSECompletedResponse(responseID string, cachedTokens int) *http
 	}
 }
 
-func TestHandleGrokAccountUpstreamErrorTempUnschedulesNonRateLimitStates(t *testing.T) {
+func TestHandleGrokAccountUpstreamErrorSetsErrorForNonRateLimitStates(t *testing.T) {
 	tests := []struct {
-		name            string
-		status          int
-		headers         http.Header
-		wantReason      string
-		wantMinCooldown time.Duration
-		wantMaxCooldown time.Duration
+		name       string
+		status     int
+		headers    http.Header
+		wantReason string
 	}{
 		{
-			name:            "unauthorized reauth",
-			status:          http.StatusUnauthorized,
-			wantReason:      "grok credentials unauthorized",
-			wantMinCooldown: 10*time.Minute - time.Second,
-			wantMaxCooldown: 10*time.Minute + time.Second,
+			name:       "unauthorized reauth",
+			status:     http.StatusUnauthorized,
+			wantReason: "grok upstream error: HTTP 401",
 		},
 		{
-			name:            "forbidden entitlement",
-			status:          http.StatusForbidden,
-			wantReason:      "grok access or entitlement denied",
-			wantMinCooldown: 30*time.Minute - time.Second,
-			wantMaxCooldown: 30*time.Minute + time.Second,
+			name:       "forbidden entitlement",
+			status:     http.StatusForbidden,
+			wantReason: "grok upstream error: HTTP 403",
 		},
 		{
-			name:            "upstream temporary error",
-			status:          http.StatusInternalServerError,
-			wantReason:      "grok upstream temporary error",
-			wantMinCooldown: 2*time.Minute - time.Second,
-			wantMaxCooldown: 2*time.Minute + time.Second,
+			name:       "upstream temporary error",
+			status:     http.StatusInternalServerError,
+			wantReason: "grok upstream error: HTTP 500",
 		},
 	}
 
@@ -2383,17 +2375,15 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesNonRateLimitStates(t *test
 			account := &Account{ID: 61, Platform: PlatformGrok, Type: AccountTypeOAuth}
 			repo := &grokQuotaAccountRepo{}
 			svc := &OpenAIGatewayService{accountRepo: repo}
-			before := time.Now()
 
 			svc.handleGrokAccountUpstreamError(context.Background(), account, tt.status, tt.headers, nil)
 
 			require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
-			require.Equal(t, 1, repo.tempUnschedCalls)
+			require.Zero(t, repo.tempUnschedCalls)
 			require.Zero(t, repo.rateLimitedCalls)
-			require.Equal(t, account.ID, repo.lastTempUnschedID)
-			require.Equal(t, tt.wantReason, repo.lastTempUnschedReason)
-			require.True(t, repo.lastTempUnschedUntil.After(before.Add(tt.wantMinCooldown)))
-			require.True(t, repo.lastTempUnschedUntil.Before(before.Add(tt.wantMaxCooldown)))
+			require.Equal(t, 1, repo.setErrorCalls)
+			require.Equal(t, account.ID, repo.lastErrorID)
+			require.Contains(t, repo.lastErrorMsg, tt.wantReason)
 		})
 	}
 }

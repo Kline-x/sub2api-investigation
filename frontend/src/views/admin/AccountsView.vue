@@ -131,6 +131,18 @@
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.tlsFingerprintProfiles.title') }}</span>
                     </button>
+                    <button class="account-tools-menu-item" @click="openAccountPatrolSettings">
+                      <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
+                        <Icon name="activity" size="sm" />
+                      </span>
+                      <span class="flex-1 text-left">{{ t('admin.accounts.patrol.open') }}</span>
+                      <span
+                        v-if="accountPatrolEnabled"
+                        class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                      >
+                        {{ t('admin.accounts.patrol.enabledBadge') }}
+                      </span>
+                    </button>
 
                     <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
                     <div class="px-2 py-2">
@@ -475,6 +487,11 @@
     </ConfirmDialog>
     <ErrorPassthroughRulesModal :show="showErrorPassthrough" @close="showErrorPassthrough = false" />
     <TLSFingerprintProfilesModal :show="showTLSFingerprintProfiles" @close="showTLSFingerprintProfiles = false" />
+    <AccountPatrolSettingsModal
+      :show="showAccountPatrolSettings"
+      @close="showAccountPatrolSettings = false"
+      @updated="handleAccountPatrolUpdated"
+    />
     <TotpStepUpDialog :controller="accountExportStepUp" />
   </AppLayout>
 </template>
@@ -519,6 +536,7 @@ import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
+import AccountPatrolSettingsModal from '@/components/admin/account/AccountPatrolSettingsModal.vue'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
@@ -604,6 +622,8 @@ const menu = reactive<{show:boolean, acc:Account|null, pos:{top:number, left:num
 const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
+const showAccountPatrolSettings = ref(false)
+const accountPatrolEnabled = ref(false)
 const upstreamBillingNow = ref(Date.now())
 let lastUpstreamBillingSortRefreshMinute = -1
 useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
@@ -1279,6 +1299,24 @@ const handleManualRefresh = async () => {
   await Promise.all([load(), loadUpstreamBillingProbeGlobalState()])
   // Force usage cells to refetch /usage on explicit user refresh.
   usageManualRefreshToken.value += 1
+}
+
+const openAccountPatrolSettings = () => {
+  showAccountToolsDropdown.value = false
+  showAccountPatrolSettings.value = true
+}
+
+const handleAccountPatrolUpdated = (settings: { enabled?: boolean }) => {
+  accountPatrolEnabled.value = !!settings?.enabled
+}
+
+const loadAccountPatrolState = async () => {
+  try {
+    const settings = await adminAPI.accounts.getAccountPatrolSettings()
+    accountPatrolEnabled.value = !!settings.enabled
+  } catch (error) {
+    console.error('Failed to load account patrol settings:', error)
+  }
 }
 
 const loadUpstreamBillingProbeGlobalState = async () => {
@@ -2302,6 +2340,7 @@ const handleClickOutside = (event: MouseEvent) => {
 onMounted(async () => {
   load()
   loadUpstreamBillingProbeGlobalState()
+loadAccountPatrolState()
   try {
     const [p, g] = await Promise.all([adminAPI.proxies.getAll(), adminAPI.groups.getAll()])
     proxies.value = p

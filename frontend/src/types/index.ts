@@ -901,6 +901,13 @@ export interface UpstreamBillingProbeSettings {
   interval_minutes: number
 }
 
+export interface AccountPatrolSettings {
+  enabled: boolean
+  interval_minutes: number
+  batch_size: number
+  concurrency: number
+}
+
 export interface UpstreamBillingProbeResult {
   account_id: number
   snapshot?: UpstreamBillingProbeSnapshot

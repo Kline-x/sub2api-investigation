@@ -22,7 +22,8 @@ import type {
   CheckMixedChannelRequest,
   CheckMixedChannelResponse,
   UpstreamBillingProbeResult,
-  UpstreamBillingProbeSettings
+  UpstreamBillingProbeSettings,
+  AccountPatrolSettings
 } from '@/types'
 
 export interface AccountListFilters {
@@ -949,6 +950,22 @@ export async function updateUpstreamBillingProbeSettings(
   return data
 }
 
+export async function getAccountPatrolSettings(): Promise<AccountPatrolSettings> {
+  const { data } = await apiClient.get<AccountPatrolSettings>('/admin/accounts/patrol/settings')
+  return data
+}
+
+export async function updateAccountPatrolSettings(
+  settings: AccountPatrolSettings
+): Promise<AccountPatrolSettings> {
+  const { data } = await apiClient.put<AccountPatrolSettings>(
+    '/admin/accounts/patrol/settings',
+    settings
+  )
+  return data
+}
+
+
 export async function setUpstreamBillingProbeEnabled(id: number, enabled: boolean): Promise<void> {
   await apiClient.put(`/admin/accounts/${id}/upstream-billing-probe`, { enabled })
 }
@@ -1019,6 +1036,8 @@ export const accountsAPI = {
   createSparkShadow,
   getUpstreamBillingProbeSettings,
   updateUpstreamBillingProbeSettings,
+  getAccountPatrolSettings,
+  updateAccountPatrolSettings,
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch

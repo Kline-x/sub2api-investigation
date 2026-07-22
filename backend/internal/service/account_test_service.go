@@ -38,27 +38,22 @@ const (
 	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
 )
 
-// accountTestFailureTempUnschedDuration 测试失败后的临时不可调度时长。
-// 与后台 refresh 重试耗尽冷却一致:先踢出调度,到期自动恢复;需要永久停用时由管理员手动置错。
-const accountTestFailureTempUnschedDuration = tokenRefreshTempUnschedDuration
-
-// markAccountTempUnschedOnTestHTTPFailure 测试连接遇到上游错误响应时的状态规则(定制):
-// 429 只走限流、不置 error/temp;其他 HTTP 错误响应(400/401/403/502 等 4xx/5xx)
-// 统一临时不可调度。永久 error 需管理员手动「设为错误」。网络错误(无 StatusCode)由调用方决定。
-func (s *AccountTestService) markAccountTempUnschedOnTestHTTPFailure(ctx context.Context, accountID int64, statusCode int, errMsg string) {
+// markAccountErrorOnTestHTTPFailure 测试连接遇到上游错误响应时的状态规则(定制):
+// 429 只走限流、不置 error;其他 HTTP 错误响应(400/401/403/502 等 4xx/5xx)
+// 直接置为永久错误。网络错误(无 StatusCode)由调用方决定。
+func (s *AccountTestService) markAccountErrorOnTestHTTPFailure(ctx context.Context, accountID int64, statusCode int, errMsg string) {
 	if s == nil || s.accountRepo == nil {
 		return
 	}
 	if statusCode < 400 || statusCode == http.StatusTooManyRequests {
 		return
 	}
-	until := time.Now().Add(accountTestFailureTempUnschedDuration)
 	reason := fmt.Sprintf("account test failed: %s", errMsg)
-	_ = s.accountRepo.SetTempUnschedulable(ctx, accountID, until, reason)
+	_ = s.accountRepo.SetError(ctx, accountID, reason)
 }
 
-// markAccountTempUnschedOnTestFailure 测试路径非 HTTP 状态类失败(如取 token 失败)的临时不可调度。
-func (s *AccountTestService) markAccountTempUnschedOnTestFailure(ctx context.Context, accountID int64, errMsg string) {
+// markAccountErrorOnTestFailure 测试路径非 HTTP 状态类失败(如取 token 失败)直接置错。
+func (s *AccountTestService) markAccountErrorOnTestFailure(ctx context.Context, accountID int64, errMsg string) {
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
 		return
 	}
@@ -66,8 +61,16 @@ func (s *AccountTestService) markAccountTempUnschedOnTestFailure(ctx context.Con
 	if msg == "" {
 		return
 	}
-	until := time.Now().Add(accountTestFailureTempUnschedDuration)
-	_ = s.accountRepo.SetTempUnschedulable(ctx, accountID, until, "account test failed: "+msg)
+	_ = s.accountRepo.SetError(ctx, accountID, "account test failed: "+msg)
+}
+
+// 兼容旧调用名：统一走直接置错（不再进入临时不可调度）。
+func (s *AccountTestService) markAccountTempUnschedOnTestHTTPFailure(ctx context.Context, accountID int64, statusCode int, errMsg string) {
+	s.markAccountErrorOnTestHTTPFailure(ctx, accountID, statusCode, errMsg)
+}
+
+func (s *AccountTestService) markAccountTempUnschedOnTestFailure(ctx context.Context, accountID int64, errMsg string) {
+	s.markAccountErrorOnTestFailure(ctx, accountID, errMsg)
 }
 
 // TestEvent represents a SSE event for account testing

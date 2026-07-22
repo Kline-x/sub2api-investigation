@@ -33,6 +33,9 @@ type grokQuotaAccountRepo struct {
 	lastTempUnschedID     int64
 	lastTempUnschedUntil  time.Time
 	lastTempUnschedReason string
+	setErrorCalls         int
+	lastErrorID           int64
+	lastErrorMsg          string
 	recoveryClearCalls    int
 	recoveryObservedAt    time.Time
 	recoveryObservedReset time.Time
@@ -99,6 +102,13 @@ type grokQuotaUsageLogRepo struct {
 	calls      int
 	startTimes []time.Time
 }
+func (r *grokQuotaAccountRepo) SetError(_ context.Context, id int64, errorMsg string) error {
+	r.setErrorCalls++
+	r.lastErrorID = id
+	r.lastErrorMsg = errorMsg
+	return nil
+}
+
 
 func (r *grokQuotaUsageLogRepo) GetAccountWindowStats(_ context.Context, _ int64, start time.Time) (*usagestats.AccountStats, error) {
 	r.calls++

@@ -130,7 +130,20 @@ export default {
         hint: '显示格式为“分组名 / 基础分 / 粘性加分”。基础分按当前筛选条件限定的候选账号计算，包含优先级、负载、排队、错误率、首包延迟、重置窗口、额度余量、计费倍率等因子；粘性加分只在开启粘性加权时用于 previous_response_id 或 session_hash。分数越大越优先。'
       },
       usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
-      upstreamBilling: {
+      patrol: {
+    title: '账号巡检',
+    description: '开启后定期分批测试全部账号（含 error 状态）；失败直接置错，成功自动恢复。',
+    enabled: '启用巡检',
+    intervalMinutes: '巡检间隔（分钟）',
+    batchSize: '每批账号数',
+    concurrency: '并发数',
+    open: '账号巡检设置',
+    enabledBadge: '巡检已开启',
+    loadFailed: '加载巡检设置失败',
+    saveFailed: '保存巡检设置失败',
+    saved: '巡检设置已保存'
+  },
+  upstreamBilling: {
         trustWarning: '此倍率由上游站点针对当前 API Key 自行声明。Sub2API 无法验证该值是否与实际扣费一致；上游站点或中间代理可能返回伪造、过期或被篡改的数据。请结合账单、余额变化和实际用量自行核验。',
         autoProbe: '自动探测上游声明倍率',
         autoProbeHint: '启用后按全局探测周期查询此账号的上游声明倍率；全局探测关闭时不会执行。',

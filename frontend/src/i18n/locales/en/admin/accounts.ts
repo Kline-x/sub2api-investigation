@@ -174,7 +174,20 @@ export default {
         hint: 'Displayed as "group / base score / sticky bonus". The base score is computed within the current filtered candidate set and includes priority, load, queue depth, error rate, first-token latency, reset window, quota headroom, billing rate, and related factors. The sticky bonus applies only when sticky weighting is enabled for previous_response_id or session_hash. Higher scores are preferred.'
       },
       usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
-      upstreamBilling: {
+      patrol: {
+    title: 'Account Patrol',
+    description: 'When enabled, periodically batch-tests all accounts (including error). Failures become error; successes recover.',
+    enabled: 'Enable patrol',
+    intervalMinutes: 'Interval (minutes)',
+    batchSize: 'Batch size',
+    concurrency: 'Concurrency',
+    open: 'Account patrol settings',
+    enabledBadge: 'Patrol on',
+    loadFailed: 'Failed to load patrol settings',
+    saveFailed: 'Failed to save patrol settings',
+    saved: 'Patrol settings saved'
+  },
+  upstreamBilling: {
         trustWarning: 'This rate is declared by the upstream site for the current API key. Sub2API cannot verify that it matches actual charges. The upstream site or an intermediary may return forged, stale, or modified data. Verify it against bills, balance changes, and actual usage.',
         autoProbe: 'Automatically probe upstream declared rate',
         autoProbeHint: 'Probe this account\'s upstream declared rate on the global interval when global probing is enabled.',

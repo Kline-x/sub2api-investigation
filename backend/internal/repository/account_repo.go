@@ -1023,6 +1023,56 @@ func (r *accountRepository) ListActive(ctx context.Context) ([]service.Account, 
 	return r.accountsToService(ctx, accounts)
 }
 
+// ListPatrolAccountIDs returns account IDs for connectivity patrol in ascending
+// id order. Includes active and error accounts so successes can auto-recover
+// and failures stay/enter error. Skips soft-deleted and disabled accounts.
+func (r *accountRepository) ListPatrolAccountIDs(ctx context.Context, afterID int64, limit int) ([]int64, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if r.sql == nil {
+		// Fallback via ent when raw SQL executor is unavailable.
+		q := r.client.Account.Query().
+			Where(
+				dbaccount.IDGT(afterID),
+				dbaccount.StatusIn(service.StatusActive, service.StatusError),
+			).
+			Order(dbent.Asc(dbaccount.FieldID)).
+			Limit(limit)
+		accounts, err := q.All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]int64, 0, len(accounts))
+		for _, a := range accounts {
+			ids = append(ids, a.ID)
+		}
+		return ids, nil
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT id
+		FROM accounts
+		WHERE deleted_at IS NULL
+			AND status IN ($1, $2)
+			AND id > $3
+		ORDER BY id ASC
+		LIMIT $4
+	`, service.StatusActive, service.StatusError, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	ids := make([]int64, 0, limit)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, options service.OAuthRefreshPageOptions) (*service.OAuthRefreshCandidatePage, error) {
 	if r.sql == nil {
 		return nil, errors.New("account repository SQL executor not configured")

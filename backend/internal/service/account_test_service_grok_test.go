@@ -245,7 +245,7 @@ func newGrokTempUnschedTestAccount(id int64) *Account {
 	}
 }
 
-func TestAccountTestService_Grok403SetsTempUnschedulable(t *testing.T) {
+func TestAccountTestService_Grok403SetsError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := newGrokTempUnschedTestAccount(31)
 	repo := &grokAccountTestTempUnschedRepo{
@@ -263,12 +263,12 @@ func TestAccountTestService_Grok403SetsTempUnschedulable(t *testing.T) {
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
 	require.Error(t, err)
-	require.Equal(t, 1, repo.setTempUnschedCalls)
-	require.Zero(t, repo.setErrorCalls)
-	require.Contains(t, repo.lastTempReason, "403")
+	require.Zero(t, repo.setTempUnschedCalls)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Contains(t, repo.lastErrorMsg, "403")
 }
 
-func TestAccountTestService_Grok400SetsTempUnschedulable(t *testing.T) {
+func TestAccountTestService_Grok400SetsError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := newGrokTempUnschedTestAccount(34)
 	repo := &grokAccountTestTempUnschedRepo{
@@ -286,9 +286,9 @@ func TestAccountTestService_Grok400SetsTempUnschedulable(t *testing.T) {
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
 	require.Error(t, err)
-	require.Equal(t, 1, repo.setTempUnschedCalls)
-	require.Zero(t, repo.setErrorCalls)
-	require.Contains(t, repo.lastTempReason, "400")
+	require.Zero(t, repo.setTempUnschedCalls)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Contains(t, repo.lastErrorMsg, "400")
 }
 
 func TestAccountTestService_Grok429DoesNotSetTempUnschedulable(t *testing.T) {
@@ -316,7 +316,7 @@ func TestAccountTestService_Grok429DoesNotSetTempUnschedulable(t *testing.T) {
 	require.Equal(t, 1, repo.rateLimitedCalls)
 }
 
-func TestAccountTestService_Grok502SetsTempUnschedulable(t *testing.T) {
+func TestAccountTestService_Grok502SetsError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := newGrokTempUnschedTestAccount(33)
 	repo := &grokAccountTestTempUnschedRepo{
@@ -334,12 +334,12 @@ func TestAccountTestService_Grok502SetsTempUnschedulable(t *testing.T) {
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
 	require.Error(t, err)
-	require.Equal(t, 1, repo.setTempUnschedCalls)
-	require.Zero(t, repo.setErrorCalls)
-	require.Contains(t, repo.lastTempReason, "502")
+	require.Zero(t, repo.setTempUnschedCalls)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Contains(t, repo.lastErrorMsg, "502")
 }
 
-func TestAccountTestService_Grok500SetsTempUnschedulable(t *testing.T) {
+func TestAccountTestService_Grok500SetsError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := newGrokTempUnschedTestAccount(35)
 	repo := &grokAccountTestTempUnschedRepo{
@@ -357,7 +357,7 @@ func TestAccountTestService_Grok500SetsTempUnschedulable(t *testing.T) {
 	err := svc.TestAccountConnection(c, account.ID, "", "", AccountTestModeDefault)
 
 	require.Error(t, err)
-	require.Equal(t, 1, repo.setTempUnschedCalls)
-	require.Zero(t, repo.setErrorCalls)
-	require.Contains(t, repo.lastTempReason, "500")
+	require.Zero(t, repo.setTempUnschedCalls)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Contains(t, repo.lastErrorMsg, "500")
 }

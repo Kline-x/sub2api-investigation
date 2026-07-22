@@ -1373,10 +1373,6 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	now := time.Now()
 	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
 	switch statusCode {
-	case http.StatusUnauthorized:
-		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok credentials unauthorized")
-	case http.StatusForbidden:
-		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok access or entitlement denied")
 	case http.StatusTooManyRequests:
 		// updateGrokUsageSnapshot installs both runtime and durable rate-limit state.
 		if isGrokFreeUsageExhausted(responseBody) {
@@ -1395,10 +1391,32 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.escalateGrokBare429(ctx, account, responseBody, now)
 		}
 	default:
-		if statusCode >= 500 {
-			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
+		// 定制: Grok 请求非 429 错误直接置 error，不再进入临时不可调度。
+		if statusCode >= 400 {
+			s.setGrokAccountError(ctx, account, statusCode, responseBody)
 		}
 	}
+}
+
+// setGrokAccountError marks a Grok account as permanent error after a non-429
+// upstream request failure (custom policy).
+func (s *OpenAIGatewayService) setGrokAccountError(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || account == nil {
+		return
+	}
+	reason := fmt.Sprintf("grok upstream error: HTTP %d", statusCode)
+	if msg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody)); msg != "" {
+		reason = fmt.Sprintf("grok upstream error: HTTP %d: %s", statusCode, msg)
+	}
+	s.BlockAccountScheduling(account, time.Time{}, reason)
+	if s.accountRepo != nil {
+		stateCtx, cancel := openAIAccountStateContext(ctx)
+		defer cancel()
+		if err := s.accountRepo.SetError(stateCtx, account.ID, reason); err != nil {
+			slog.Warn("grok_set_error_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		}
+	}
+	slog.Warn("grok_account_set_error", "account_id", account.ID, "status_code", statusCode, "reason", reason)
 }
 
 func isGrokFreeUsageExhausted(body []byte) bool {

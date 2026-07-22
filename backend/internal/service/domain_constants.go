@@ -383,6 +383,8 @@ const (
 	// SettingKeyUpstreamBillingProbeSettings stores the global enable switch and interval
 	// for probing remote Sub2API API-key billing metadata.
 	SettingKeyUpstreamBillingProbeSettings = "upstream_billing_probe_settings"
+	// SettingKeyAccountPatrolSettings stores global account patrol (batch connectivity test) config.
+	SettingKeyAccountPatrolSettings = "account_patrol_settings"
 
 	// =========================
 	// Overload Cooldown (529)
