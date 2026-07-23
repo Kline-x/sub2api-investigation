@@ -8,7 +8,7 @@
 
 - README 保留定制版说明与文档索引
 - VERSION 对齐上游基线 `0.1.163`（上游 tag 内 VERSION 文件仍为 0.1.162，本仓库按标签基线写入）
-- `openai_gateway_grok.go`：合并上游 401/403（含 `applyGrokForbiddenPolicy` 模型级 403 隔离）；**保留** grok 免费额度 24h 封禁与裸 429 指数递增封禁
+- (`openai_gateway_grok.go`：保留上游 `applyGrokForbiddenPolicy`（命中配置规则时模型/时长隔离）；401 与未命中规则的 403/其它非 429 **继续定制 SetError**；**保留** grok 免费额度 24h 与裸 429 指数递增封禁)
 - `upstream_models.go`：采用上游统一 Grok OAuth 模型同步（`GetAccessTokenForManualTest`、CLI 头与身份头）；**保留** OAuth `/models` 失败回退 `xai.DefaultModelIDs()` 路径
 - `AccountsView.vue`：采用上游工具菜单/移动端适配；**保留**账号巡检设置与巡检记录入口
 - 保留自有更新源（`Kline-x/sub2api-investigation`）、`.goreleaser.simple.yaml` prerelease:false、Grok OAuth 429 持续切号、temp 三次置错、批测/CPA 等既有定制

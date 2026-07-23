@@ -1433,13 +1433,13 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	now := time.Now()
 	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
 	switch statusCode {
-	case http.StatusUnauthorized:
-		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok credentials unauthorized")
 	case http.StatusForbidden:
+		// 上游: 管理员配置的 403 规则可做模型级/时长隔离；命中则直接返回。
 		if s.applyGrokForbiddenPolicy(ctx, account, responseBody) {
 			return
 		}
-		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok access or entitlement denied")
+		// 定制: 未命中规则的 403 直接置 error（不用 30m 临时不可调度）。
+		s.setGrokAccountError(ctx, account, statusCode, responseBody)
 	case http.StatusTooManyRequests:
 		// updateGrokUsageSnapshot installs both runtime and durable rate-limit state.
 		if isGrokFreeUsageExhausted(responseBody) {

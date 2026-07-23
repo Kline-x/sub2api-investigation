@@ -242,21 +242,22 @@ func TestGrokContentPolicySSEErrorDoesNotMutateOrFailover(t *testing.T) {
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
-func TestHandleGrokAccountUpstreamErrorEntitlement403KeepsDefaultCooldown(t *testing.T) {
+func TestHandleGrokAccountUpstreamErrorEntitlement403SetsError(t *testing.T) {
+	// Custom policy: unmatched entitlement 403 sets permanent error instead of 30m temp cooldown.
 	repo := &grokQuotaAccountRepo{}
 	svc := &OpenAIGatewayService{accountRepo: repo}
 	account := &Account{ID: 4716, Platform: PlatformGrok, Type: AccountTypeOAuth}
-	before := time.Now()
 
 	svc.handleGrokAccountUpstreamError(
 		context.Background(), account, http.StatusForbidden, nil,
 		[]byte(`{"error":{"message":"subscription required"}}`),
 	)
 
-	require.Equal(t, 1, repo.tempUnschedCalls)
-	require.Equal(t, "grok access or entitlement denied", repo.lastTempUnschedReason)
-	require.Greater(t, repo.lastTempUnschedUntil, before.Add(29*time.Minute))
-	require.Less(t, repo.lastTempUnschedUntil, before.Add(31*time.Minute))
+	require.Zero(t, repo.tempUnschedCalls)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Equal(t, account.ID, repo.lastErrorID)
+	require.Contains(t, repo.lastErrorMsg, "grok upstream error: HTTP 403")
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
 func TestHandleGrokAccountUpstreamError403UsesConfiguredRule(t *testing.T) {
@@ -289,7 +290,8 @@ func TestHandleGrokAccountUpstreamError403UsesConfiguredRule(t *testing.T) {
 	require.Less(t, repo.lastTempUnschedUntil, before.Add(8*time.Minute))
 }
 
-func TestHandleGrokAccountUpstreamError403ConfiguredUnmatchedKeepsDefaultCooldown(t *testing.T) {
+func TestHandleGrokAccountUpstreamError403ConfiguredUnmatchedSetsError(t *testing.T) {
+	// Custom policy: configured rules that do not match still fall through to permanent error.
 	repo := &grokQuotaAccountRepo{}
 	svc := &OpenAIGatewayService{accountRepo: repo}
 	account := &Account{
@@ -313,7 +315,8 @@ func TestHandleGrokAccountUpstreamError403ConfiguredUnmatchedKeepsDefaultCooldow
 		[]byte(`{"error":{"message":"subscription required"}}`),
 	)
 
-	require.Equal(t, 1, repo.tempUnschedCalls)
-	require.Equal(t, "grok access or entitlement denied", repo.lastTempUnschedReason)
+	require.Zero(t, repo.tempUnschedCalls)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Contains(t, repo.lastErrorMsg, "grok upstream error: HTTP 403")
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
