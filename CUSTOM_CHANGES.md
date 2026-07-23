@@ -2,6 +2,19 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
+## v0.1.163 合并（2026-07-23，custom/v0.1.163）
+
+合并上游 `v0.1.163` 到分支 `custom/v0.1.163`（自 `main` 切出）。冲突处理要点：
+
+- README 保留定制版说明与文档索引
+- VERSION 对齐上游基线 `0.1.163`（上游 tag 内 VERSION 文件仍为 0.1.162，本仓库按标签基线写入）
+- `openai_gateway_grok.go`：合并上游 401/403（含 `applyGrokForbiddenPolicy` 模型级 403 隔离）；**保留** grok 免费额度 24h 封禁与裸 429 指数递增封禁
+- `upstream_models.go`：采用上游统一 Grok OAuth 模型同步（`GetAccessTokenForManualTest`、CLI 头与身份头）；**保留** OAuth `/models` 失败回退 `xai.DefaultModelIDs()` 路径
+- `AccountsView.vue`：采用上游工具菜单/移动端适配；**保留**账号巡检设置与巡检记录入口
+- 保留自有更新源（`Kline-x/sub2api-investigation`）、`.goreleaser.simple.yaml` prerelease:false、Grok OAuth 429 持续切号、temp 三次置错、批测/CPA 等既有定制
+
+上游 0.1.163 主要能力：分组级 OpenAI 推理策略、Grok `/responses/compact` 与链式中继受保护视频、Redis ACL 用户名、Grok OAuth 模型同步与策略 403 模型级隔离、Codex 客户端工具 Responses 往返、多处移动端布局修复、优雅关停缓冲用量/计费丢失修复等。
+
 ## v0.1.162 合并（2026-07-22，main）
 
 合并上游 `v0.1.162` 到 main。冲突处理要点：
