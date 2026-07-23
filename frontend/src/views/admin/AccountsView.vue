@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <AppLayout>
     <TablePageLayout>
       <template #filters>
@@ -65,73 +65,75 @@
               <!-- More Tools Dropdown -->
               <div class="relative" ref="accountToolsDropdownRef">
                 <button
-                  @click="
-                    showAccountToolsDropdown = !showAccountToolsDropdown;
-                    showAutoRefreshDropdown = false
-                  "
+                  ref="accountToolsTriggerRef"
+                  @click="toggleAccountToolsDropdown"
                   class="btn btn-secondary px-2 md:px-3"
                   :title="t('admin.accounts.moreActions')"
+                  :aria-expanded="showAccountToolsDropdown"
                 >
                   <Icon name="more" size="sm" class="md:mr-1.5" />
                   <span class="hidden md:inline">{{ t('admin.accounts.moreActions') }}</span>
                   <Icon name="chevronDown" size="xs" class="ml-1 hidden md:inline" />
                 </button>
-                <div
-                  v-if="showAccountToolsDropdown"
-                  class="absolute right-0 z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] origin-top-right overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl dark:border-dark-700 dark:bg-dark-800"
-                >
-                  <div class="max-h-[70vh] overflow-y-auto p-2">
-                    <div class="px-2 py-2">
-                      <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                        {{ t('admin.accounts.dataActions') }}
+                <Teleport to="body">
+                  <div
+                    v-if="showAccountToolsDropdown"
+                    class="fixed z-[9999] origin-top-right overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl dark:border-dark-700 dark:bg-dark-800"
+                    :style="accountToolsDropdownStyle"
+                    @click.stop
+                  >
+                    <div class="overflow-y-auto p-2" :style="{ maxHeight: `${accountToolsDropdownPosition.maxHeight}px` }">
+                      <div class="px-2 py-2">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                          {{ t('admin.accounts.dataActions') }}
+                        </div>
                       </div>
-                    </div>
-                    <button class="account-tools-menu-item" @click="openSyncFromCrs">
-                      <span class="account-tools-menu-icon bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
-                        <Icon name="sync" size="sm" />
-                      </span>
-                      <span class="flex-1 text-left">{{ t('admin.accounts.syncFromCrs') }}</span>
-                    </button>
-                    <button class="account-tools-menu-item" @click="openImportData">
-                      <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
-                        <Icon name="upload" size="sm" />
-                      </span>
-                      <span class="flex-1 text-left">{{ t('admin.accounts.dataImport') }}</span>
-                    </button>
-                    <button class="account-tools-menu-item" @click="openExportDataDialogFromMenu">
-                      <span class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
-                        <Icon name="download" size="sm" />
-                      </span>
-                      <span class="flex-1 text-left">
-                        {{ selIds.length ? t('admin.accounts.dataExportSelected') : t('admin.accounts.dataExport') }}
-                      </span>
-                      <span
-                        v-if="selIds.length"
-                        class="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/40 dark:text-primary-300"
-                      >
-                        {{ t('admin.accounts.selectedCount', { count: selIds.length }) }}
-                      </span>
-                    </button>
+                      <button class="account-tools-menu-item" @click="openSyncFromCrs">
+                        <span class="account-tools-menu-icon bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
+                          <Icon name="sync" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.syncFromCrs') }}</span>
+                      </button>
+                      <button class="account-tools-menu-item" @click="openImportData">
+                        <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
+                          <Icon name="upload" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.dataImport') }}</span>
+                      </button>
+                      <button class="account-tools-menu-item" @click="openExportDataDialogFromMenu">
+                        <span class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
+                          <Icon name="download" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">
+                          {{ selIds.length ? t('admin.accounts.dataExportSelected') : t('admin.accounts.dataExport') }}
+                        </span>
+                        <span
+                          v-if="selIds.length"
+                          class="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/40 dark:text-primary-300"
+                        >
+                          {{ t('admin.accounts.selectedCount', { count: selIds.length }) }}
+                        </span>
+                      </button>
 
-                    <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
-                    <div class="px-2 py-2">
-                      <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                        {{ t('admin.accounts.toolActions') }}
+                      <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
+                      <div class="px-2 py-2">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                          {{ t('admin.accounts.toolActions') }}
+                        </div>
                       </div>
-                    </div>
-                    <button class="account-tools-menu-item" @click="openErrorPassthrough">
-                      <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
-                        <Icon name="shield" size="sm" />
-                      </span>
-                      <span class="flex-1 text-left">{{ t('admin.errorPassthrough.title') }}</span>
-                    </button>
-                    <button class="account-tools-menu-item" @click="openTLSFingerprintProfiles">
-                      <span class="account-tools-menu-icon bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200">
-                        <Icon name="lock" size="sm" />
-                      </span>
-                      <span class="flex-1 text-left">{{ t('admin.tlsFingerprintProfiles.title') }}</span>
-                    </button>
-                    <button class="account-tools-menu-item" @click="openAccountPatrolSettings">
+                      <button class="account-tools-menu-item" @click="openErrorPassthrough">
+                        <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
+                          <Icon name="shield" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.errorPassthrough.title') }}</span>
+                      </button>
+                      <button class="account-tools-menu-item" @click="openTLSFingerprintProfiles">
+                        <span class="account-tools-menu-icon bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                          <Icon name="lock" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.tlsFingerprintProfiles.title') }}</span>
+                      </button>
+                      <button class="account-tools-menu-item" @click="openAccountPatrolSettings">
                       <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
                         <Icon name="sync" size="sm" />
                       </span>
@@ -143,35 +145,37 @@
                         {{ t('admin.accounts.patrol.enabledBadge') }}
                       </span>
                     </button>
-                    <button class="account-tools-menu-item" @click="openAccountPatrolRecords">
+                      <button class="account-tools-menu-item" @click="openAccountPatrolRecords">
                       <span class="account-tools-menu-icon bg-sky-50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-300">
                         <Icon name="clock" size="sm" />
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.accounts.patrol.openRecords') }}</span>
                     </button>
 
-                    <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
-                    <div class="px-2 py-2">
-                      <div class="flex items-center justify-between gap-3">
-                        <span class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                          {{ t('admin.accounts.viewColumns') }}
-                        </span>
-                        <Icon name="grid" size="sm" class="text-gray-400" />
+
+                      <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
+                      <div class="px-2 py-2">
+                        <div class="flex items-center justify-between gap-3">
+                          <span class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                            {{ t('admin.accounts.viewColumns') }}
+                          </span>
+                          <Icon name="grid" size="sm" class="text-gray-400" />
+                        </div>
+                      </div>
+                      <div class="grid grid-cols-1 gap-1">
+                        <button
+                          v-for="col in toggleableColumns"
+                          :key="col.key"
+                          @click="toggleColumn(col.key)"
+                          class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700"
+                        >
+                          <span class="truncate">{{ col.label }}</span>
+                          <Icon v-if="isColumnVisible(col.key)" name="check" size="sm" class="text-primary-500" />
+                        </button>
                       </div>
                     </div>
-                    <div class="grid grid-cols-1 gap-1">
-                      <button
-                        v-for="col in toggleableColumns"
-                        :key="col.key"
-                        @click="toggleColumn(col.key)"
-                        class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700"
-                      >
-                        <span class="truncate">{{ col.label }}</span>
-                        <Icon v-if="isColumnVisible(col.key)" name="check" size="sm" class="text-primary-500" />
-                      </button>
-                    </div>
                   </div>
-                </div>
+                </Teleport>
               </div>
             </template>
           </AccountTableActions>
@@ -192,23 +196,14 @@
       <template #table>
         <AccountBulkActionsBar
           :selected-ids="selIds"
-          :filtered-total="pagination.total"
-          :all-visible-selected="allVisibleSelected"
-          :all-filtered-selected="allFilteredSelected"
-          :selecting-all="selectingAllFiltered"
-          :busy="bulkActionBusy"
-          :busy-label="bulkActionBusyLabel"
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
-          @set-error="handleBulkSetError"
           @refresh-token="handleBulkRefreshToken"
-          @test="handleBulkTest"
           @probe-upstream-billing="handleBulkProbeUpstreamBilling"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
           @select-page="selectPage"
-          @select-filtered="selectAllFiltered"
           @toggle-schedulable="handleBulkToggleSchedulable"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -461,14 +456,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <BatchTestConfirmModal
-      :show="showBatchTestModal"
-      :accounts="batchTestAccounts"
-      :account-ids="selIds"
-      @close="showBatchTestModal = false"
-      @confirm="runBulkTest"
-    />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @set-error="handleSetError" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -503,8 +491,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -525,7 +512,6 @@ import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrs
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
-import BatchTestConfirmModal from '@/components/admin/account/BatchTestConfirmModal.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
@@ -549,11 +535,11 @@ import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { sanitizeUrl } from '@/utils/url'
+import { getFloatingPanelPosition } from '@/utils/floatingPanel'
 import type { Account, AccountPlatform, AccountSchedulerGroupScore, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, UpstreamBillingProbeSnapshot } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const router = useRouter()
 const authStore = useAuthStore()
 
 const proxies = ref<AccountProxy[]>([])
@@ -615,6 +601,8 @@ const showTest = ref(false)
 const showStats = ref(false)
 const showErrorPassthrough = ref(false)
 const showTLSFingerprintProfiles = ref(false)
+const showAccountPatrolSettings = ref(false)
+const accountPatrolEnabled = ref(false)
 const edAcc = ref<Account | null>(null)
 const tempUnschedAcc = ref<Account | null>(null)
 const deletingAcc = ref<Account | null>(null)
@@ -630,8 +618,6 @@ const menu = reactive<{show:boolean, acc:Account|null, pos:{top:number, left:num
 const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
-const showAccountPatrolSettings = ref(false)
-const accountPatrolEnabled = ref(false)
 const upstreamBillingNow = ref(Date.now())
 let lastUpstreamBillingSortRefreshMinute = -1
 useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
@@ -639,6 +625,20 @@ useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
 // Account tools dropdown
 const showAccountToolsDropdown = ref(false)
 const accountToolsDropdownRef = ref<HTMLElement | null>(null)
+const accountToolsTriggerRef = ref<HTMLElement | null>(null)
+const accountToolsDropdownPosition = reactive({
+  top: null as number | null,
+  bottom: null as number | null,
+  left: 16,
+  width: 320,
+  maxHeight: 0
+})
+const accountToolsDropdownStyle = computed(() => ({
+  top: accountToolsDropdownPosition.top == null ? 'auto' : `${accountToolsDropdownPosition.top}px`,
+  bottom: accountToolsDropdownPosition.bottom == null ? 'auto' : `${accountToolsDropdownPosition.bottom}px`,
+  left: `${accountToolsDropdownPosition.left}px`,
+  width: `${accountToolsDropdownPosition.width}px`
+}))
 const hiddenColumns = reactive<Set<string>>(new Set())
 const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'scheduler_score', 'rate_multiplier']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
@@ -957,106 +957,6 @@ const {
   getId: (account) => account.id
 })
 
-const selectingAllFiltered = ref(false)
-// 批量操作进行中:禁用工具栏按钮并展示处理中文案
-const bulkActionBusy = ref(false)
-const bulkActionBusyLabel = ref('')
-
-const runWithBulkBusy = async (label: string, action: () => Promise<void>) => {
-  if (bulkActionBusy.value) return
-  bulkActionBusy.value = true
-  bulkActionBusyLabel.value = label
-  // 先让 busy/disabled 状态刷到 DOM，再发请求；否则短请求可能看起来像“没 loading”
-  await nextTick()
-  try {
-    await action()
-  } finally {
-    bulkActionBusy.value = false
-    bulkActionBusyLabel.value = ''
-  }
-}
-const allFilteredSelected = computed(() => (
-  pagination.total > 0 && selIds.value.length === pagination.total
-))
-
-// 跨页勾选时 listIDs 只回 id,需要额外缓存 platform 供批量测试按平台选模型
-const selectedAccountMeta = ref<Map<number, { platform: string; type?: string }>>(new Map())
-
-const rememberSelectedAccountMeta = (rows: Array<{ id: number; platform: string; type?: string }>) => {
-  if (rows.length === 0) return
-  const next = new Map(selectedAccountMeta.value)
-  for (const row of rows) {
-    if (!row?.id) continue
-    next.set(row.id, { platform: row.platform, type: row.type })
-  }
-  selectedAccountMeta.value = next
-}
-
-const pruneSelectedAccountMeta = (ids: number[]) => {
-  const idSet = new Set(ids)
-  const next = new Map<number, { platform: string; type?: string }>()
-  for (const [id, meta] of selectedAccountMeta.value) {
-    if (idSet.has(id)) next.set(id, meta)
-  }
-  selectedAccountMeta.value = next
-}
-
-const currentAccountFilters = () => ({
-  platform: params.platform,
-  type: params.type,
-  status: params.status,
-  group: params.group,
-  search: params.search,
-  privacy_mode: params.privacy_mode
-})
-
-const selectAllFiltered = async () => {
-  if (selectingAllFiltered.value) return
-  selectingAllFiltered.value = true
-  try {
-    const result = await adminAPI.accounts.listIDs(currentAccountFilters())
-    setSelectedIds(result.ids)
-    pruneSelectedAccountMeta(result.ids)
-
-    // 有平台筛选时,全选结果平台已知;否则抽样当前筛选列表补齐 platform 元数据
-    if (params.platform) {
-      rememberSelectedAccountMeta(
-        result.ids.map((id) => ({ id, platform: params.platform, type: params.type || undefined }))
-      )
-    } else if (result.ids.length > 0) {
-      try {
-        const preview = await adminAPI.accounts.list(1, Math.min(100, result.ids.length), currentAccountFilters())
-        const idSet = new Set(result.ids)
-        rememberSelectedAccountMeta(
-          (preview.items || [])
-            .filter((account) => idSet.has(account.id))
-            .map((account) => ({ id: account.id, platform: account.platform, type: account.type }))
-        )
-      } catch (metaError) {
-        console.error('Failed to hydrate selected account platforms:', metaError)
-      }
-    }
-  } catch (error: any) {
-    appStore.showError(error?.message || t('admin.accounts.bulkActions.selectAllFailed'))
-  } finally {
-    selectingAllFiltered.value = false
-  }
-}
-
-// 当前页账号变化/勾选变化时,同步可见账号的 platform 缓存
-watch(
-  [accounts, selIds],
-  () => {
-    pruneSelectedAccountMeta(selIds.value)
-    rememberSelectedAccountMeta(
-      accounts.value
-        .filter((account) => selIds.value.includes(account.id))
-        .map((account) => ({ id: account.id, platform: account.platform, type: account.type }))
-    )
-  },
-  { deep: true }
-)
-
 const swipeVirtualContext: SwipeSelectVirtualContext = {
   getVirtualizer: () => dataTableRef.value?.virtualizer ?? null,
   getSortedData: () => dataTableRef.value?.sortedData ?? accounts.value,
@@ -1124,7 +1024,6 @@ const refreshUpstreamBillingSortedList = async (force = false) => {
 }
 
 const debouncedReload = () => {
-  clearSelection()
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
@@ -1304,10 +1203,58 @@ const refreshAccountsIncrementally = async () => {
 }
 
 const handleManualRefresh = async () => {
-  await Promise.all([load(), loadUpstreamBillingProbeGlobalState()])
+  await Promise.all([load(), loadUpstreamBillingProbeGlobalState(), loadAccountPatrolState()])
   // Force usage cells to refetch /usage on explicit user refresh.
   usageManualRefreshToken.value += 1
 }
+
+const loadUpstreamBillingProbeGlobalState = async () => {
+  try {
+    const settings = await adminAPI.accounts.getUpstreamBillingProbeSettings()
+    upstreamBillingProbeGloballyEnabled.value = settings.enabled
+  } catch (error) {
+    console.error('Failed to load upstream billing probe settings:', error)
+  }
+}
+
+const closeAccountToolsDropdown = () => {
+  showAccountToolsDropdown.value = false
+}
+
+const updateAccountToolsDropdownPosition = () => {
+  const trigger = accountToolsTriggerRef.value
+  if (!trigger) return
+
+  const position = getFloatingPanelPosition(
+    trigger.getBoundingClientRect(),
+    document.documentElement.clientWidth || window.innerWidth,
+    window.innerHeight
+  )
+  Object.assign(accountToolsDropdownPosition, position)
+}
+
+const toggleAccountToolsDropdown = () => {
+  const nextVisible = !showAccountToolsDropdown.value
+  showAutoRefreshDropdown.value = false
+  if (nextVisible) updateAccountToolsDropdownPosition()
+  showAccountToolsDropdown.value = nextVisible
+}
+
+const openSyncFromCrs = () => {
+  closeAccountToolsDropdown()
+  showSync.value = true
+}
+
+const openImportData = () => {
+  closeAccountToolsDropdown()
+  showImportData.value = true
+}
+
+const openExportDataDialogFromMenu = () => {
+  closeAccountToolsDropdown()
+  openExportDataDialog()
+}
+
 
 const openAccountPatrolSettings = () => {
   showAccountToolsDropdown.value = false
@@ -1331,35 +1278,6 @@ const loadAccountPatrolState = async () => {
     console.error('Failed to load account patrol settings:', error)
   }
 }
-
-const loadUpstreamBillingProbeGlobalState = async () => {
-  try {
-    const settings = await adminAPI.accounts.getUpstreamBillingProbeSettings()
-    upstreamBillingProbeGloballyEnabled.value = settings.enabled
-  } catch (error) {
-    console.error('Failed to load upstream billing probe settings:', error)
-  }
-}
-
-const closeAccountToolsDropdown = () => {
-  showAccountToolsDropdown.value = false
-}
-
-const openSyncFromCrs = () => {
-  closeAccountToolsDropdown()
-  showSync.value = true
-}
-
-const openImportData = () => {
-  closeAccountToolsDropdown()
-  showImportData.value = true
-}
-
-const openExportDataDialogFromMenu = () => {
-  closeAccountToolsDropdown()
-  openExportDataDialog()
-}
-
 const openErrorPassthrough = () => {
   closeAccountToolsDropdown()
   showErrorPassthrough.value = true
@@ -1623,144 +1541,38 @@ const toggleSelectAllVisible = (event: Event) => {
   const target = event.target as HTMLInputElement
   toggleVisible(target.checked)
 }
-const handleBulkDelete = async () => {
-  if (!confirm(t('common.confirm'))) return
-  await runWithBulkBusy(t('admin.accounts.bulkActions.deleting'), async () => {
-    try {
-      await Promise.all(selIds.value.map((id) => adminAPI.accounts.delete(id)))
-      clearSelection()
-      reload()
-    } catch (error) {
-      console.error('Failed to bulk delete accounts:', error)
-      appStore.showError(String(error))
-    }
-  })
-}
+const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return; try { await Promise.all(selIds.value.map(id => adminAPI.accounts.delete(id))); clearSelection(); reload() } catch (error) { console.error('Failed to bulk delete accounts:', error) } }
 const handleBulkResetStatus = async () => {
   if (!confirm(t('common.confirm'))) return
-  await runWithBulkBusy(t('admin.accounts.bulkActions.resettingStatus'), async () => {
-    try {
-      const result = await adminAPI.accounts.batchClearError(selIds.value)
-      if (result.failed > 0) {
-        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
-      } else {
-        appStore.showSuccess(t('admin.accounts.bulkActions.resetStatusSuccess', { count: result.success }))
-        clearSelection()
-      }
-      reload()
-    } catch (error) {
-      console.error('Failed to bulk reset status:', error)
-      appStore.showError(String(error))
-    }
-  })
-}
-
-const handleBulkSetError = async () => {
-  if (selIds.value.length === 0) return
-  if (!confirm(t('admin.accounts.bulkActions.setErrorConfirm', { count: selIds.value.length }))) return
-  await runWithBulkBusy(t('admin.accounts.bulkActions.settingError'), async () => {
-    try {
-      const result = await adminAPI.accounts.batchSetError(selIds.value)
-      if (result.failed > 0) {
-        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
-      } else {
-        appStore.showSuccess(t('admin.accounts.bulkActions.setErrorSuccess', { count: result.success }))
-        clearSelection()
-      }
-      reload()
-    } catch (error) {
-      console.error('Failed to bulk set error:', error)
-      appStore.showError(String(error))
-    }
-  })
-}
-
-const showBatchTestModal = ref(false)
-const batchTestAccounts = computed(() => {
-  const fromPage = new Map(
-    accounts.value.map((account) => [account.id, account.platform] as const)
-  )
-  return selIds.value.map((id) => {
-    const platform =
-      fromPage.get(id) ||
-      selectedAccountMeta.value.get(id)?.platform ||
-      params.platform ||
-      'unknown'
-    return { id, platform }
-  })
-})
-
-const ensureBatchTestPlatformMeta = async () => {
-  const missing = selIds.value.filter((id) => {
-    if (accounts.value.some((account) => account.id === id)) return false
-    return !selectedAccountMeta.value.has(id)
-  })
-  if (missing.length === 0) return
-  if (params.platform) {
-    rememberSelectedAccountMeta(
-      missing.map((id) => ({ id, platform: params.platform, type: params.type || undefined }))
-    )
-    return
-  }
   try {
-    const preview = await adminAPI.accounts.list(1, Math.min(100, selIds.value.length), currentAccountFilters())
-    const idSet = new Set(selIds.value)
-    rememberSelectedAccountMeta(
-      (preview.items || [])
-        .filter((account) => idSet.has(account.id))
-        .map((account) => ({ id: account.id, platform: account.platform, type: account.type }))
-    )
-  } catch (error) {
-    console.error('Failed to ensure batch test platforms:', error)
-  }
-}
-
-const handleBulkTest = async () => {
-  if (selIds.value.length === 0) return
-  await ensureBatchTestPlatformMeta()
-  showBatchTestModal.value = true
-}
-
-const runBulkTest = async (modelsByPlatform: Record<string, string>) => {
-  showBatchTestModal.value = false
-  await runWithBulkBusy(t('admin.accounts.bulkActions.testing'), async () => {
-    try {
-      const result = await adminAPI.accounts.batchTest(selIds.value, modelsByPlatform)
-      if (result.failed > 0) {
-        appStore.showError(
-          t('admin.accounts.bulkActions.testCompletedWithFailures', {
-            success: result.success,
-            failed: result.failed
-          })
-        )
-      } else {
-        appStore.showSuccess(t('admin.accounts.bulkActions.testSuccess', { count: result.success }))
-        clearSelection()
-      }
-      reload()
-    } catch (error) {
-      console.error('Failed to bulk test accounts:', error)
-      appStore.showError(String(error))
+    const result = await adminAPI.accounts.batchClearError(selIds.value)
+    if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.bulkActions.resetStatusSuccess', { count: result.success }))
+      clearSelection()
     }
-  })
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk reset status:', error)
+    appStore.showError(String(error))
+  }
 }
 const handleBulkRefreshToken = async () => {
   if (!confirm(t('common.confirm'))) return
-  await runWithBulkBusy(t('admin.accounts.bulkActions.refreshingToken'), async () => {
-    try {
-      const result = await adminAPI.accounts.batchRefresh(selIds.value)
-      if (result.failed > 0) {
-        appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
-      } else {
-        appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: result.success }))
-        clearSelection()
-      }
-      reload()
-    } catch (error) {
-      console.error('Failed to bulk refresh token:', error)
-      appStore.showError(String(error))
+  try {
+    const result = await adminAPI.accounts.batchRefresh(selIds.value)
+    if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: result.success }))
+      clearSelection()
     }
-  })
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk refresh token:', error)
+    appStore.showError(String(error))
+  }
 }
 const handleBulkProbeUpstreamBilling = async () => {
   const accountIDs = [...selIds.value]
@@ -1772,31 +1584,29 @@ const handleBulkProbeUpstreamBilling = async () => {
     appStore.showError(t('admin.accounts.upstreamBilling.batchLimit'))
     return
   }
-  await runWithBulkBusy(t('admin.accounts.bulkActions.probingUpstreamBilling'), async () => {
-    accountIDs.forEach(id => probingUpstreamBilling.add(id))
-    try {
-      const results = await adminAPI.accounts.probeUpstreamBillingBatch(accountIDs)
-      let patched = false
-      results.forEach(result => {
-        if (result.snapshot) {
-          patchUpstreamBillingSnapshot(result.account_id, result.snapshot)
-          patched = true
-        }
-      })
-      if (patched) await refreshUpstreamBillingSortedList(true)
-      const failed = results.filter(result => result.error).length
-      if (failed > 0) {
-        appStore.showError(t('admin.accounts.upstreamBilling.batchPartial', { success: results.length - failed, failed }))
-      } else {
-        appStore.showSuccess(t('admin.accounts.upstreamBilling.batchCompleted', { count: results.length }))
+  accountIDs.forEach(id => probingUpstreamBilling.add(id))
+  try {
+    const results = await adminAPI.accounts.probeUpstreamBillingBatch(accountIDs)
+    let patched = false
+    results.forEach(result => {
+      if (result.snapshot) {
+        patchUpstreamBillingSnapshot(result.account_id, result.snapshot)
+        patched = true
       }
-    } catch (error) {
-      console.error('Failed to probe upstream billing in batch:', error)
-      appStore.showError(extractApiErrorMessage(error, t('admin.accounts.upstreamBilling.probeFailed')))
-    } finally {
-      accountIDs.forEach(id => probingUpstreamBilling.delete(id))
+    })
+    if (patched) await refreshUpstreamBillingSortedList(true)
+    const failed = results.filter(result => result.error).length
+    if (failed > 0) {
+      appStore.showError(t('admin.accounts.upstreamBilling.batchPartial', { success: results.length - failed, failed }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.upstreamBilling.batchCompleted', { count: results.length }))
     }
-  })
+  } catch (error) {
+    console.error('Failed to probe upstream billing in batch:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.upstreamBilling.probeFailed')))
+  } finally {
+    accountIDs.forEach(id => probingUpstreamBilling.delete(id))
+  }
 }
 const updateSchedulableInList = (accountIds: number[], schedulable: boolean) => {
   if (accountIds.length === 0) return
@@ -1865,45 +1675,40 @@ const normalizeBulkSchedulableResult = (
 }
 const handleBulkToggleSchedulable = async (schedulable: boolean) => {
   const accountIds = [...selIds.value]
-  const busyLabel = schedulable
-    ? t('admin.accounts.bulkActions.enablingScheduling')
-    : t('admin.accounts.bulkActions.disablingScheduling')
-  await runWithBulkBusy(busyLabel, async () => {
-    try {
-      const result = await adminAPI.accounts.bulkUpdate(accountIds, { schedulable })
-      const { successIds, failedIds, successCount, failedCount, hasIds, hasCounts } = normalizeBulkSchedulableResult(result, accountIds)
-      if (!hasIds && !hasCounts) {
-        appStore.showError(t('admin.accounts.bulkSchedulableResultUnknown'))
-        setSelectedIds(accountIds)
-        load().catch((error) => {
-          console.error('Failed to refresh accounts:', error)
-        })
-        return
-      }
-      if (successIds.length > 0) {
-        updateSchedulableInList(successIds, schedulable)
-      }
-      if (successCount > 0 && failedCount === 0) {
-        const message = schedulable
-          ? t('admin.accounts.bulkSchedulableEnabled', { count: successCount })
-          : t('admin.accounts.bulkSchedulableDisabled', { count: successCount })
-        appStore.showSuccess(message)
-      }
-      if (failedCount > 0) {
-        const message = hasCounts || hasIds
-          ? t('admin.accounts.bulkSchedulablePartial', { success: successCount, failed: failedCount })
-          : t('admin.accounts.bulkSchedulableResultUnknown')
-        appStore.showError(message)
-        setSelectedIds(failedIds.length > 0 ? failedIds : accountIds)
-      } else {
-        if (hasIds) clearSelection()
-        else setSelectedIds(accountIds)
-      }
-    } catch (error) {
-      console.error('Failed to bulk toggle schedulable:', error)
-      appStore.showError(t('common.error'))
+  try {
+    const result = await adminAPI.accounts.bulkUpdate(accountIds, { schedulable })
+    const { successIds, failedIds, successCount, failedCount, hasIds, hasCounts } = normalizeBulkSchedulableResult(result, accountIds)
+    if (!hasIds && !hasCounts) {
+      appStore.showError(t('admin.accounts.bulkSchedulableResultUnknown'))
+      setSelectedIds(accountIds)
+      load().catch((error) => {
+        console.error('Failed to refresh accounts:', error)
+      })
+      return
     }
-  })
+    if (successIds.length > 0) {
+      updateSchedulableInList(successIds, schedulable)
+    }
+    if (successCount > 0 && failedCount === 0) {
+      const message = schedulable
+        ? t('admin.accounts.bulkSchedulableEnabled', { count: successCount })
+        : t('admin.accounts.bulkSchedulableDisabled', { count: successCount })
+      appStore.showSuccess(message)
+    }
+    if (failedCount > 0) {
+      const message = hasCounts || hasIds
+        ? t('admin.accounts.bulkSchedulablePartial', { success: successCount, failed: failedCount })
+        : t('admin.accounts.bulkSchedulableResultUnknown')
+      appStore.showError(message)
+      setSelectedIds(failedIds.length > 0 ? failedIds : accountIds)
+    } else {
+      if (hasIds) clearSelection()
+      else setSelectedIds(accountIds)
+    }
+  } catch (error) {
+    console.error('Failed to bulk toggle schedulable:', error)
+    appStore.showError(t('common.error'))
+  }
 }
 const buildBulkEditFilterSnapshot = () => {
   const rawParams = toRaw(params) as Record<string, unknown>
@@ -2155,7 +1960,6 @@ const handleSchedule = async (a: Account) => {
 }
 const closeSchedulePanel = () => { showSchedulePanel.value = false; scheduleAcc.value = null; scheduleModelOptions.value = [] }
 const handleReAuth = (a: Account) => { reAuthAcc.value = a; showReAuth.value = true }
-const refreshingCredentialAccountIDs = new Set<number>()
 const duplicatingAccountIDs = new Set<number>()
 const handleDuplicateAccount = async (a: Account) => {
   if (duplicatingAccountIDs.has(a.id)) return
@@ -2172,18 +1976,12 @@ const handleDuplicateAccount = async (a: Account) => {
   }
 }
 const handleRefresh = async (a: Account) => {
-  if (refreshingCredentialAccountIDs.has(a.id)) return
-  refreshingCredentialAccountIDs.add(a.id)
   try {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(updated)
     enterAutoRefreshSilentWindow()
-    appStore.showSuccess(t('admin.accounts.refreshTokenSuccess'))
-  } catch (error: any) {
+  } catch (error) {
     console.error('Failed to refresh credentials:', error)
-    appStore.showError(error?.message || t('admin.accounts.refreshTokenFailed'))
-  } finally {
-    refreshingCredentialAccountIDs.delete(a.id)
   }
 }
 const handleRecoverState = async (a: Account) => {
@@ -2195,18 +1993,6 @@ const handleRecoverState = async (a: Account) => {
   } catch (error: any) {
     console.error('Failed to recover account state:', error)
     appStore.showError(error?.message || t('admin.accounts.recoverStateFailed'))
-  }
-}
-const handleSetError = async (a: Account) => {
-  if (!confirm(t('admin.accounts.setErrorConfirm', { name: a.name }))) return
-  try {
-    const updated = await adminAPI.accounts.setError(a.id)
-    patchAccountInList(updated)
-    enterAutoRefreshSilentWindow()
-    appStore.showSuccess(t('admin.accounts.setErrorSuccess'))
-  } catch (error: any) {
-    console.error('Failed to set account error:', error)
-    appStore.showError(error?.message || t('admin.accounts.setErrorFailed'))
   }
 }
 const handleResetQuota = async (a: Account) => {
@@ -2334,9 +2120,14 @@ const proxyExpiryText = (p: AccountProxy): string => {
   return params ? t(key, params) : t(key)
 }
 
-// 滚动时关闭操作菜单（不关闭列设置下拉菜单）
+// 表格滚动时关闭行操作菜单，并让顶部工具菜单继续贴紧触发按钮。
 const handleScroll = () => {
   menu.show = false
+  if (showAccountToolsDropdown.value) updateAccountToolsDropdownPosition()
+}
+
+const handleViewportResize = () => {
+  if (showAccountToolsDropdown.value) updateAccountToolsDropdownPosition()
 }
 
 // 点击外部关闭顶部下拉菜单
@@ -2362,6 +2153,7 @@ loadAccountPatrolState()
     console.error('Failed to load proxies/groups:', error)
   }
   window.addEventListener('scroll', handleScroll, true)
+  window.addEventListener('resize', handleViewportResize)
   document.addEventListener('click', handleClickOutside)
 
   if (autoRefreshEnabled.value) {
@@ -2374,6 +2166,7 @@ loadAccountPatrolState()
 
 onUnmounted(() => {
   window.removeEventListener('scroll', handleScroll, true)
+  window.removeEventListener('resize', handleViewportResize)
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
