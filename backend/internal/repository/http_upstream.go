@@ -29,6 +29,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shadowsocks"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
@@ -1324,6 +1325,8 @@ func enableOpenAIHTTP2KeepAlive(transport *http.Transport) (*http2.Transport, er
 //   - nil/空: 直连，使用 TLSFingerprintDialer
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
+//   - ss（shadowsocks，定制功能）: 复用通用 tlsfingerprint.NewDialer，把 ss 隧道的
+//     DialContext 作为 baseDialer 注入，使 TLS 指纹握手在 ss 隧道之上进行
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (*http.Transport, error) {
 	transport := &http.Transport{
 		MaxIdleConns:          settings.maxIdleConns,
@@ -1358,6 +1361,22 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 			slog.Debug("tls_fingerprint_transport_http_connect", "proxy", proxyURL.Host)
 			httpDialer := tlsfingerprint.NewHTTPProxyDialer(profile, proxyURL)
 			transport.DialTLSContext = httpDialer.DialTLSContext
+		case "ss":
+			// ss 代理（定制功能）：不新增按协议写死的 XXXProxyDialer，而是复用通用的
+			// tlsfingerprint.NewDialer(profile, baseDialer)，把 ss 隧道的 DialContext
+			// 作为 baseDialer 注入——ss 隧道在下，TLS 指纹握手在隧道之上进行。
+			// 配置或 dialer 创建失败时直接返回 error，不得退化为无指纹的直连/代理。
+			slog.Debug("tls_fingerprint_transport_ss", "proxy", proxyURL.Host)
+			cfg, err := shadowsocks.ConfigFromURL(proxyURL)
+			if err != nil {
+				return nil, err
+			}
+			ssDialer, err := shadowsocks.NewDialer(cfg)
+			if err != nil {
+				return nil, err
+			}
+			fingerprintDialer := tlsfingerprint.NewDialer(profile, ssDialer.DialContext)
+			transport.DialTLSContext = fingerprintDialer.DialTLSContext
 		default:
 			// 未知代理类型，回退到普通代理配置（无 TLS 指纹）
 			slog.Debug("tls_fingerprint_transport_unknown_scheme_fallback", "scheme", scheme)
