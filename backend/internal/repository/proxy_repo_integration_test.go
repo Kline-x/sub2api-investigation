@@ -92,6 +92,66 @@ func (s *ProxyRepoSuite) TestDelete() {
 	s.Require().Error(err, "expected error after delete")
 }
 
+// --- Extra ---
+
+func (s *ProxyRepoSuite) TestExtraRoundTrip() {
+	want := map[string]string{"plugin": "obfs", "mode": "tls", "obfs-host": "bing.com"}
+	proxy := &service.Proxy{
+		Name:     "ss-node",
+		Protocol: "ss",
+		Host:     "h.example.com",
+		Port:     443,
+		Username: "chacha20-ietf-poly1305",
+		Password: "secret",
+		Status:   service.StatusActive,
+		Extra:    want,
+	}
+
+	s.Require().NoError(s.repo.Create(s.ctx, proxy), "Create")
+
+	got, err := s.repo.GetByID(s.ctx, proxy.ID)
+	s.Require().NoError(err, "GetByID")
+	s.Require().Equal(want, got.Extra)
+}
+
+func (s *ProxyRepoSuite) TestExtraUpdate() {
+	proxy := &service.Proxy{
+		Name:     "ss-node-update",
+		Protocol: "ss",
+		Host:     "h2.example.com",
+		Port:     443,
+		Status:   service.StatusActive,
+		Extra:    map[string]string{"plugin": "obfs"},
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, proxy), "Create")
+
+	proxy.Extra = map[string]string{"plugin": "obfs", "mode": "http"}
+	s.Require().NoError(s.repo.Update(s.ctx, proxy), "Update")
+
+	got, err := s.repo.GetByID(s.ctx, proxy.ID)
+	s.Require().NoError(err, "GetByID after update")
+	s.Require().Equal(map[string]string{"plugin": "obfs", "mode": "http"}, got.Extra)
+}
+
+func (s *ProxyRepoSuite) TestExtraClearOnUpdate() {
+	proxy := &service.Proxy{
+		Name:     "ss-node-clear",
+		Protocol: "ss",
+		Host:     "h3.example.com",
+		Port:     443,
+		Status:   service.StatusActive,
+		Extra:    map[string]string{"plugin": "obfs"},
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, proxy), "Create")
+
+	proxy.Extra = nil
+	s.Require().NoError(s.repo.Update(s.ctx, proxy), "Update")
+
+	got, err := s.repo.GetByID(s.ctx, proxy.ID)
+	s.Require().NoError(err, "GetByID after clear")
+	s.Require().Empty(got.Extra)
+}
+
 // --- List / ListWithFilters ---
 
 func (s *ProxyRepoSuite) TestList() {
