@@ -76,6 +76,10 @@
             <button @click="showImportData = true" class="btn btn-secondary">
               {{ t('admin.proxies.dataImport') }}
             </button>
+            <button @click="showImportSubscription = true" class="btn btn-secondary">
+              <Icon name="download" size="md" class="mr-2" />
+              {{ t('admin.proxies.importSubscription') }}
+            </button>
             <button @click="showExportDataDialog = true" class="btn btn-secondary">
               {{ selectedCount > 0 ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
             </button>
@@ -466,7 +470,7 @@
           </div>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.proxies.username') }}</label>
+          <label class="input-label">{{ createUsernameLabel }}</label>
           <input
             v-model="createForm.username"
             type="text"
@@ -699,7 +703,7 @@
           </div>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.proxies.username') }}</label>
+          <label class="input-label">{{ editUsernameLabel }}</label>
           <input v-model="editForm.username" type="text" class="input" />
         </div>
         <div>
@@ -840,6 +844,12 @@
       @imported="handleDataImported"
     />
 
+    <ImportSubscriptionModal
+      :show="showImportSubscription"
+      @close="showImportSubscription = false"
+      @imported="handleSubscriptionImported"
+    />
+
     <BaseDialog
       :show="showQualityReportDialog"
       :title="t('admin.proxies.qualityReportTitle')"
@@ -978,6 +988,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ImportDataModal from '@/components/admin/proxy/ImportDataModal.vue'
+import ImportSubscriptionModal from '@/components/admin/proxy/ImportSubscriptionModal.vue'
 import Select from '@/components/common/Select.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -1014,7 +1025,8 @@ const protocolOptions = computed(() => [
   { value: 'http', label: 'HTTP' },
   { value: 'https', label: 'HTTPS' },
   { value: 'socks5', label: 'SOCKS5' },
-  { value: 'socks5h', label: 'SOCKS5H' }
+  { value: 'socks5h', label: 'SOCKS5H' },
+  { value: 'ss', label: 'SS' }
 ])
 
 const statusOptions = computed(() => [
@@ -1029,13 +1041,23 @@ const protocolSelectOptions = computed(() => [
   { value: 'http', label: t('admin.proxies.protocols.http') },
   { value: 'https', label: t('admin.proxies.protocols.https') },
   { value: 'socks5', label: t('admin.proxies.protocols.socks5') },
-  { value: 'socks5h', label: t('admin.proxies.protocols.socks5h') }
+  { value: 'socks5h', label: t('admin.proxies.protocols.socks5h') },
+  { value: 'ss', label: t('admin.proxies.protocols.ss') }
 ])
 
 const editStatusOptions = computed(() => [
   { value: 'active', label: t('admin.accounts.status.active') },
   { value: 'inactive', label: t('admin.accounts.status.inactive') }
 ])
+
+// ss 节点复用「用户名」槽位存加密方式(cipher)，与常规代理的用户名语义不同，
+// 选中 ss 协议时把标签换成「加密方式」，避免管理员误解字段含义。
+const createUsernameLabel = computed(() =>
+  createForm.protocol === 'ss' ? t('admin.proxies.cipher') : t('admin.proxies.username')
+)
+const editUsernameLabel = computed(() =>
+  editForm.protocol === 'ss' ? t('admin.proxies.cipher') : t('admin.proxies.username')
+)
 
 const proxies = ref<Proxy[]>([])
 const visiblePasswordIds = reactive(new Set<number>())
@@ -1063,6 +1085,7 @@ const showEditModal = ref(false)
 const editPasswordVisible = ref(false)
 const editPasswordDirty = ref(false)
 const showImportData = ref(false)
+const showImportSubscription = ref(false)
 const showDeleteDialog = ref(false)
 const showBatchDeleteDialog = ref(false)
 const showExportDataDialog = ref(false)
@@ -1275,6 +1298,10 @@ const handleDataImported = () => {
   loadProxies()
 }
 
+const handleSubscriptionImported = () => {
+  loadProxies()
+}
+
 // Parse proxy URL: protocol://user:pass@host:port or protocol://host:port
 const parseProxyUrl = (
   line: string
@@ -1446,7 +1473,6 @@ const handleUpdateProxy = async () => {
   try {
     const updateData: any = {
       name: editForm.name.trim(),
-      protocol: editForm.protocol,
       host: editForm.host.trim(),
       port: editForm.port,
       username: editForm.username.trim() || null,
@@ -1460,6 +1486,13 @@ const handleUpdateProxy = async () => {
     // Only include password if user actually modified the field
     if (editPasswordDirty.value) {
       updateData.password = editForm.password.trim() || null
+    }
+
+    // 后端更新接口的协议白名单暂未收录 ss（仅订阅导入路径放行），
+    // 编辑一个已通过订阅导入的 ss 代理时不回传 protocol 字段，
+    // 让后端按“未携带则保持原值”处理，避免更新其它字段时被 400 拒绝。
+    if (editForm.protocol !== 'ss') {
+      updateData.protocol = editForm.protocol
     }
 
     await adminAPI.proxies.update(editingProxy.value.id, updateData)
