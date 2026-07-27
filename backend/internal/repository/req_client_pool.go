@@ -9,13 +9,14 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shadowsocks"
 
 	"github.com/imroc/req/v3"
 )
 
 // reqClientOptions 定义 req 客户端的构建参数
 type reqClientOptions struct {
-	ProxyURL    string        // 代理 URL（支持 http/https/socks5）
+	ProxyURL    string        // 代理 URL（支持 http/https/socks5/socks5h/ss）
 	Timeout     time.Duration // 请求超时时间
 	Impersonate bool          // 是否模拟 Chrome 浏览器指纹
 	ForceHTTP2  bool          // 是否强制使用 HTTP/2
@@ -52,12 +53,8 @@ func getSharedReqClient(opts reqClientOptions) (*req.Client, error) {
 	if opts.Impersonate {
 		client = client.ImpersonateChrome()
 	}
-	trimmed, _, err := proxyurl.Parse(opts.ProxyURL)
-	if err != nil {
+	if err := applyReqClientProxy(client, opts.ProxyURL); err != nil {
 		return nil, err
-	}
-	if trimmed != "" {
-		client.SetProxyURL(trimmed)
 	}
 	client = instrumentReqClient(client)
 
@@ -66,6 +63,54 @@ func getSharedReqClient(opts reqClientOptions) (*req.Client, error) {
 		return c, nil
 	}
 	return client, nil
+}
+
+// applyReqClientProxy 按代理 URL 为 req 客户端配置出站通道。
+//
+// 为什么不能对所有协议统一走 SetProxyURL：
+// req 的传输层（Transport.dialConn）只识别 socks5/socks5h，其余 scheme 一律按
+// HTTP 代理处理——对 https 目标发明文 CONNECT，对 http 目标直接把绝对 URI 发给
+// 代理端口。ss 节点不说 HTTP，必然握手失败。因此 ss 必须改走自定义 DialContext：
+// 把 ss 隧道作为底层 TCP 连接注入（client.SetDial），并且**不设置** Proxy——
+// 这样 req 的 TLS 指纹握手（ImpersonateChrome）仍然在隧道之上正常进行。
+//
+// fail-fast 约束：ss 配置解析或 dialer 创建失败时必须返回 error，
+// 绝不允许退化为"不设代理直连"（会暴露服务器真实 IP）。
+func applyReqClientProxy(client *req.Client, proxyURL string) error {
+	if client == nil {
+		return fmt.Errorf("req client is nil")
+	}
+
+	trimmed, parsed, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return err
+	}
+	if trimmed == "" {
+		// 空代理表示直连，保持现状
+		return nil
+	}
+
+	// ss（shadowsocks，定制功能，合并上游时勿丢）
+	if parsed != nil && strings.EqualFold(parsed.Scheme, "ss") {
+		cfg, cfgErr := shadowsocks.ConfigFromURL(parsed)
+		if cfgErr != nil {
+			return cfgErr
+		}
+		ssDialer, dialErr := shadowsocks.NewDialer(cfg)
+		if dialErr != nil {
+			return dialErr
+		}
+		// req.T() 默认 Proxy = http.ProxyFromEnvironment。若不显式清掉，
+		// 宿主机存在 HTTP(S)_PROXY 时 req 会认为"有代理"，转而用 ss 隧道去连那个
+		// 环境代理并发 CONNECT —— 隧道分层错乱。账号已显式指定 ss 代理，
+		// 环境变量必须让位。
+		client.SetProxy(nil)
+		client.SetDial(ssDialer.DialContext)
+		return nil
+	}
+
+	client.SetProxyURL(trimmed)
+	return nil
 }
 
 func instrumentReqClient(client *req.Client) *req.Client {

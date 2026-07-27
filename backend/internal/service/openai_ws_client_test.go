@@ -34,6 +34,39 @@ func TestCoderOpenAIWSClientDialer_ProxyHTTPClientInvalidURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+// ss 代理（定制功能）必须走 Transport.DialContext（ss 隧道），而不是 Transport.Proxy。
+// 设置 Proxy 会让 net/http 向 ss 节点端口发明文 CONNECT，必然失败。
+func TestCoderOpenAIWSClientDialer_ProxyHTTPClientSS走DialContext(t *testing.T) {
+	dialer := newDefaultOpenAIWSClientDialer()
+	impl, ok := dialer.(*coderOpenAIWSClientDialer)
+	require.True(t, ok)
+
+	client, err := impl.proxyHTTPClient("ss://chacha20-ietf-poly1305:pwd@127.0.0.1:38080")
+	require.NoError(t, err)
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.DialContext, "ss 代理应注入隧道 DialContext")
+	require.Nil(t, transport.Proxy, "ss 代理不得设置 Transport.Proxy（会退化为明文 CONNECT）")
+}
+
+// fail-fast：非法/不支持的代理必须报错，绝不能返回一个"无代理直连"的客户端
+// （直连会暴露服务器真实 IP）。
+func TestCoderOpenAIWSClientDialer_ProxyHTTPClient非法代理不退化直连(t *testing.T) {
+	dialer := newDefaultOpenAIWSClientDialer()
+	impl, ok := dialer.(*coderOpenAIWSClientDialer)
+	require.True(t, ok)
+
+	for _, raw := range []string{
+		"ftp://127.0.0.1:21",               // 不在白名单
+		"ss://127.0.0.1:38081",             // ss 缺少 cipher/password
+		"ss://rc4-md5:pwd@127.0.0.1:38082", // 不支持的 cipher
+		"http://",                          // 缺少 host
+	} {
+		_, err := impl.proxyHTTPClient(raw)
+		require.Error(t, err, "代理 %q 应报错而非退化直连", raw)
+	}
+}
+
 func TestCoderOpenAIWSClientDialer_TransportMetricsSnapshot(t *testing.T) {
 	dialer := newDefaultOpenAIWSClientDialer()
 	impl, ok := dialer.(*coderOpenAIWSClientDialer)
