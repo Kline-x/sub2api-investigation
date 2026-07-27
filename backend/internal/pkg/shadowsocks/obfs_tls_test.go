@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -347,6 +348,69 @@ func TestTLSObfs_读取跨记录边界的分段载荷(t *testing.T) {
 	}
 }
 
+// oneByteReadConn 包一层 net.Conn，把每次底层 Read 强制截断成最多 1 字节。
+//
+// net.Pipe 是同步、无内部缓冲的：一次 server.Write 的数据会按对端 Read 请求的
+// 字节数被逐次取出，直到写完为止——但只要某次 Read 请求的长度够大（比如
+// io.ReadFull(c.Conn, hdr) 请求整整 5 字节），net.Pipe 就会一次性把 5 字节全部
+// 交出去。这意味着默认的 net.Pipe 测试永远不会触发"一次 Read 只拿到半个记录头"
+// 这种最脆的分段场景。oneByteReadConn 通过把每次请求砍到 1 字节，逼真实地暴露
+// tlsObfsConn.Read/skipHandshakeResponse/readRecordHeader 里的分段读取与 remain
+// 记账逻辑。
+type oneByteReadConn struct {
+	net.Conn
+}
+
+func (c oneByteReadConn) Read(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	return c.Conn.Read(b[:1])
+}
+
+func TestTLSObfs_单字节分段读取下握手跳过与记录解包仍正确(t *testing.T) {
+	// 构造一条完整流：伪造握手响应（ServerHello + ChangeCipherSpec）
+	// + 两条 application data 记录，其中第二条故意跨越多次 1 字节 Read。
+	first := []byte("0123456789")             // 10 字节
+	second := []byte("second-record-payload") // 22 字节
+
+	var stream []byte
+	stream = append(stream, realServerHelloRecord...)
+	stream = append(stream, realChangeCipherSpecRecord...)
+	stream = append(stream, 0x17, 0x03, 0x03, byte(len(first)>>8), byte(len(first)))
+	stream = append(stream, first...)
+	stream = append(stream, 0x17, 0x03, 0x03, byte(len(second)>>8), byte(len(second)))
+	stream = append(stream, second...)
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		_, _ = server.Write(stream)
+		server.Close()
+	}()
+
+	obfsConn := newTLSObfsConn(oneByteReadConn{Conn: client}, testObfsHost)
+	_ = obfsConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	want := append(append([]byte(nil), first...), second...)
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(obfsConn, got); err != nil {
+		t.Fatalf("单字节分段读取失败: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("读出内容 = % x, want % x", got, want)
+	}
+
+	// 流已耗尽（对端已 Close），再读一次应得到干净的 EOF，
+	// 而不是把半条记录头之类的残留状态当成新记录去解析。
+	n, err := obfsConn.Read(make([]byte, 8))
+	if n != 0 || err != io.EOF {
+		t.Fatalf("流耗尽后 Read = (%d, %v), want (0, io.EOF)", n, err)
+	}
+}
+
 func TestTLSObfs_握手响应异常时报错(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -362,7 +426,80 @@ func TestTLSObfs_握手响应异常时报错(t *testing.T) {
 	_ = obfsConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 
 	buf := make([]byte, 64)
-	if _, err := obfsConn.Read(buf); err == nil {
+	_, err := obfsConn.Read(buf)
+	if err == nil {
 		t.Fatal("服务端返回 alert 记录时应报错，实际成功返回")
+	}
+	// 断言必须落在 recordTypeAlert 分支上：把该分支删掉落到 default，
+	// 或者干脆返回 EOF，弱断言（仅 err != nil）照样能通过，起不到回归防护作用。
+	if !strings.Contains(err.Error(), "alert") {
+		t.Fatalf("错误信息未包含 alert: %v", err)
+	}
+}
+
+func TestTLSObfs_握手响应出现未知记录类型时报错(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		// 0x99 不是 change_cipher_spec/alert/handshake 中的任何一种，
+		// 必须落入 skipHandshakeResponse 的 default 分支报错。
+		_, _ = server.Write([]byte{0x99, 0x03, 0x03, 0x00, 0x01, 0x00})
+		server.Close()
+	}()
+
+	obfsConn := newTLSObfsConn(client, testObfsHost)
+	_ = obfsConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	buf := make([]byte, 64)
+	_, err := obfsConn.Read(buf)
+	if err == nil {
+		t.Fatal("服务端返回未知记录类型时应报错，实际成功返回")
+	}
+	if !strings.Contains(err.Error(), "unexpected") {
+		t.Fatalf("错误信息未包含 unexpected: %v", err)
+	}
+}
+
+func TestTLSObfs_记录长度超过上限时报错(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		var stream []byte
+		stream = append(stream, realServerHelloRecord...)
+		stream = append(stream, realChangeCipherSpecRecord...)
+		// 声明长度 0xFFFF（65535），超过 maxTLSRecordPayload(16384)，
+		// 无需真的填这么多字节的 body —— 应在读完记录头后立刻报错。
+		stream = append(stream, 0x17, 0x03, 0x03, 0xFF, 0xFF)
+		_, _ = server.Write(stream)
+		server.Close()
+	}()
+
+	obfsConn := newTLSObfsConn(client, testObfsHost)
+	_ = obfsConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	buf := make([]byte, 64)
+	_, err := obfsConn.Read(buf)
+	if err == nil {
+		t.Fatal("记录长度超过上限时应报错，实际成功返回")
+	}
+	if !strings.Contains(err.Error(), "oversized") {
+		t.Fatalf("错误信息未包含 oversized: %v", err)
+	}
+}
+
+func TestMakeClientHello_空Host报错(t *testing.T) {
+	if _, err := makeClientHello([]byte("salt"), ""); err == nil {
+		t.Fatal("host 为空时应报错，实际成功返回")
+	}
+}
+
+func TestMakeClientHello_Host超过上限报错(t *testing.T) {
+	longHost := string(bytes.Repeat([]byte("a"), maxTLSRecordPayload+1))
+	if _, err := makeClientHello([]byte("salt"), longHost); err == nil {
+		t.Fatal("host 超过 maxTLSRecordPayload 时应报错，实际成功返回")
 	}
 }

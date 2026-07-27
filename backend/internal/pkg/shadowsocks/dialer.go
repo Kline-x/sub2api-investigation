@@ -29,6 +29,12 @@ func NewDialer(cfg Config) (*Dialer, error) {
 		return nil, fmt.Errorf(
 			"shadowsocks: unsupported obfs mode %q (supported: %s)", cfg.ObfsMode, ObfsModeTLS)
 	}
+	// ConfigFromURL 已经做过同样的校验，但调用方可能绕过它直接构造 Config，
+	// 这里在构造入口再兜底一次：ObfsHost 为空会让 makeClientHello 静默生成
+	// 畸形 SNI（服务端多半直接静默拒绝连接），必须在此处就报出可诊断的错误。
+	if cfg.ObfsMode == ObfsModeTLS && cfg.ObfsHost == "" {
+		return nil, fmt.Errorf("shadowsocks: obfs mode %q requires a non-empty ObfsHost", ObfsModeTLS)
+	}
 
 	// PickCipher 内部会 ToUpper 并做别名映射，
 	// 因此可直接传订阅里的原始写法（如 chacha20-ietf-poly1305）。

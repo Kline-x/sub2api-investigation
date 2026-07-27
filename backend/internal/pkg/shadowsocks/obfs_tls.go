@@ -196,8 +196,8 @@ func (c *tlsObfsConn) readRecordHeader() ([]byte, error) {
 // makeClientHello 构造一个 TLS 1.2 ClientHello 记录，SNI 填 host，
 // payload 放进 session ticket 扩展（RFC 5077 定义的扩展类型 0x0023）。
 //
-// 字段布局刻意贴近 simple-obfs 社区实现的经典形态，使得 payload 恒定落在
-// 记录起始后的第 142 字节：
+// 字段布局是对真实机场节点抓包实测反推得到的固定形态，使得 payload 恒定
+// 落在记录起始后的第 142 字节：
 //
 //	0   16 03 01 LL LL              记录头（handshake，版本写 TLS 1.0，与真实客户端一致）
 //	5   01 LL LL LL                 ClientHello 握手头
@@ -209,8 +209,8 @@ func (c *tlsObfsConn) readRecordHeader() ([]byte, error) {
 //	136 LL LL                       extensions 长度
 //	138 00 23 LL LL <payload>       session ticket 扩展 —— 载荷在此
 //	    00 00 ...                   server_name(SNI) = host
+//	    00 17 / 00 16               extended_master_secret / encrypt_then_mac
 //	    00 0b / 00 0a / 00 0d ...   ec_point_formats / supported_groups / signature_algorithms
-//	    00 16 / 00 17               encrypt_then_mac / extended_master_secret
 //
 // host 原样写入 SNI（包括机场下发的形如 "x.default.microsoft.fi:249057" 这种
 // 带冒号的字符串——服务端按原字符串比对，不能当端口切开）。
@@ -218,7 +218,15 @@ func makeClientHello(payload []byte, host string) ([]byte, error) {
 	if len(payload) > maxClientHelloPayload {
 		return nil, fmt.Errorf("shadowsocks: obfs first payload too large (%d bytes)", len(payload))
 	}
-	if len(host) > 0xFFFF-5 {
+	if host == "" {
+		return nil, fmt.Errorf("shadowsocks: obfs host is empty")
+	}
+	// host 最终会连同 SNI 扩展头（5 字节）、session ticket 载荷及其他固定
+	// 扩展一起塞进同一条 TLS 记录，记录长度字段只有 2 字节（RFC 5246 §6.2.1）。
+	// 这里贴着 maxTLSRecordPayload 卡一个宽松但正确的上限，避免像
+	// 0xFFFF-5 那样的上界在 payload/其他扩展占用空间后仍能让记录总长溢出
+	// 2 字节字段而不报错。
+	if len(host) > maxTLSRecordPayload {
 		return nil, fmt.Errorf("shadowsocks: obfs host too long (%d bytes)", len(host))
 	}
 
