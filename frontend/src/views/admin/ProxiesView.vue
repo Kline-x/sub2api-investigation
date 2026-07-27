@@ -1488,12 +1488,10 @@ const handleUpdateProxy = async () => {
       updateData.password = editForm.password.trim() || null
     }
 
-    // 后端更新接口的协议白名单暂未收录 ss（仅订阅导入路径放行），
-    // 编辑一个已通过订阅导入的 ss 代理时不回传 protocol 字段，
-    // 让后端按“未携带则保持原值”处理，避免更新其它字段时被 400 拒绝。
-    if (editForm.protocol !== 'ss') {
-      updateData.protocol = editForm.protocol
-    }
+    // 后端更新接口的协议白名单已收录 ss，protocol 必须无条件回传：
+    // 若对 ss 做特判跳过，把 http/socks5 代理改成 ss 时该字段不会发送，
+    // 改动静默不生效（UI 却提示更新成功）。
+    updateData.protocol = editForm.protocol
 
     await adminAPI.proxies.update(editingProxy.value.id, updateData)
     appStore.showSuccess(t('admin.proxies.proxyUpdated'))

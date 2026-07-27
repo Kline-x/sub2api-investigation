@@ -316,6 +316,10 @@ type Proxy struct {
 	FallbackMode   string     `json:"fallback_mode"`
 	BackupProxyID  *int64     `json:"backup_proxy_id"`
 	ExpiryWarnDays int        `json:"expiry_warn_days"`
+
+	// Extra 协议扩展参数（定制功能，合并上游时勿丢）。
+	// 目前用于承载 ss 的 plugin/mode/obfs-host；不含凭据，可安全下发前端。
+	Extra map[string]string `json:"extra,omitempty"`
 }
 
 type ProxyWithAccountCount struct {

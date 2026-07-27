@@ -445,6 +445,9 @@ func ProxyFromService(p *service.Proxy) *Proxy {
 		FallbackMode:   p.FallbackMode,
 		BackupProxyID:  p.BackupProxyID,
 		ExpiryWarnDays: p.ExpiryWarnDays,
+		// Extra：协议扩展参数（定制功能，合并上游时勿丢）。
+		// 缺失会让 /admin/proxies 系列接口永远不返回 extra，前端无法展示/回填 obfs 参数。
+		Extra: p.Extra,
 	}
 }
 
