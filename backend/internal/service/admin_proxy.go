@@ -81,6 +81,7 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 		FallbackMode:   mode,
 		BackupProxyID:  input.BackupProxyID,
 		ExpiryWarnDays: input.ExpiryWarnDays,
+		Extra:          input.Extra,
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
 		return nil, err
@@ -139,6 +140,11 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	proxy.FallbackMode = mode
 	proxy.BackupProxyID = input.BackupProxyID
 	proxy.ExpiryWarnDays = input.ExpiryWarnDays
+	// Extra 仅在调用方显式传入时覆盖，避免未携带 Extra 的普通编辑请求（如现有
+	// UpdateProxyRequest）把订阅导入写入的 obfs 参数等信息静默清空。
+	if input.Extra != nil {
+		proxy.Extra = input.Extra
+	}
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err

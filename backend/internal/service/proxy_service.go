@@ -45,6 +45,7 @@ type CreateProxyRequest struct {
 	Port     int    `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	Extra    map[string]string
 }
 
 // UpdateProxyRequest 更新代理请求
@@ -81,6 +82,7 @@ func (s *ProxyService) Create(ctx context.Context, req CreateProxyRequest) (*Pro
 		Username: req.Username,
 		Password: req.Password,
 		Status:   StatusActive,
+		Extra:    req.Extra,
 	}
 
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
