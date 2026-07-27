@@ -2,6 +2,21 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
+## shadowsocks 出站代理（2026-07-27，`develop/xuyang/ss-obfs-proxy`，待发布）
+
+让 sub2api **单一二进制内**原生支持通过机场订阅节点出站，解决「服务器访问不了上游 AI API」。不新增容器/进程，面板一键更新后即可用；不改宿主机路由，宿主机默认出口 IP 不受影响。
+
+- **feat**：内嵌 `ss + simple-obfs(tls)` 拨号（`pkg/shadowsocks/`）。加密层用 `go-shadowsocks2`（Apache-2.0），obfs 伪装层自实现（未引用 GPL 实现源码——mihomo 的 `transport/simple-obfs` 子包被 pkg.go.dev 标为 GPL-3.0，设计阶段已否决）
+- **feat**：Clash 订阅解析（`pkg/clashsub/`）+ 订阅导入接口 `POST /admin/proxies/import-subscription`（支持 `dry_run` 预览；不受支持的节点回传中文跳过原因，不静默丢弃）
+- **feat**：`proxies` 表新增 `extra` JSONB 列（定制迁移 `9001_`，避开上游编号段），存插件参数；`Proxy.URL()` 拼成 query（按 key 排序保证字符串稳定，否则击穿 httpclient 的 transport 缓存）
+- **feat**：ss 接入两条代理路径——`proxyutil.ConfigureTransportProxy` 与 TLS 指纹路径（`repository/http_upstream.go`）。后者此前 ss 会落入「未知协议回退」，隧道通但**不带指纹**
+- **feat**：前端协议下拉加 ss，选中时「用户名」标签变「加密方式」（ss 的 cipher 占 userinfo 的 username 位）；代理列表页新增「从订阅导入」（先 dry_run 预览再确认）
+- **验证**：真实机场节点端到端打通，走完整生产链路 `Proxy.URL() → proxyurl.Parse → proxyutil → HTTPS` 请求 api.anthropic.com 返回 HTTP 401（带 request_id）
+
+设计文档 `docs/superpowers/specs/2026-07-27-ss-obfs-proxy-design.md`，实施计划 `docs/superpowers/plans/2026-07-27-ss-obfs-proxy.md`（均被 gitignore，需 `git add -f`）。
+
+**已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
+
 ## v0.1.162 合并（2026-07-22，main）
 
 合并上游 `v0.1.162` 到 main。冲突处理要点：
@@ -161,6 +176,7 @@
 | **Grok 连接测试允许非调度态取 token**（error/暂停/temp 可测；网关路径仍要求可调度） | `service/grok_token_provider.go`（`GetAccessTokenForManualTest`，v0.1.162 起采用上游接口；`withAccountConnectionTestPath` 仍保留给其它路径）、`oauth_refresh_api.go`、`account_test_service.go` |
 | grok 刷新失败置错（4xx 非429→SetError） | `service/grok_refresh_failure.go`、`pkg/xai/errors.go`、`repository/grok_oauth_client.go`、`handler/admin/account_handler.go`、`grok_oauth_handler.go` |
 | CPA(xai-*.json)导入 | `handler/admin/account_data_xai.go`、`account_data.go`（`XaiAccounts`）、前端 `ImportDataModal.vue` / `utils/xaiImport.ts` |
+| **shadowsocks 出站代理**（ss + simple-obfs/tls 内嵌拨号；Clash 订阅导入） | `pkg/shadowsocks/`（config/dialer/obfs_tls）、`pkg/clashsub/`、`pkg/proxyurl/parse.go`（`allowedSchemes` 含 `ss`）、`pkg/proxyutil/dialer.go`（`case "ss"`）、`repository/http_upstream.go`（TLS 指纹分派 `case "ss"`）、`migrations/9001_custom_proxy_extra.sql`、`ent/schema/proxy.go`（`extra`）、`service/proxy.go`（`Extra` + `URL()` 拼 query）、`handler/admin/proxy_subscription.go`、`handler/admin/proxy_handler.go`（`oneof` 白名单含 ss）、前端 `ProxiesView.vue` / `types/index.ts` / `api/admin/proxies.ts` |
 | 导入后刷新+测试流水（取代 probe；**合并上游须保留 importData 替换点**） | `handler/admin/grok_import_pipeline.go`、`account_data.go` |
 
 ## 已知问题
