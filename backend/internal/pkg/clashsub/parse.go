@@ -25,8 +25,8 @@ type Node struct {
 
 // Skipped 记录被跳过的节点及原因。
 type Skipped struct {
-	Name   string
-	Reason string
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 type clashFile struct {
