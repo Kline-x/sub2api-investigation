@@ -28,6 +28,7 @@ type Proxy struct {
 	FallbackMode   string
 	BackupProxyID  *int64
 	ExpiryWarnDays int
+	Extra          map[string]string
 }
 
 func (p *Proxy) IsActive() bool {
@@ -46,6 +47,15 @@ func (p *Proxy) URL() string {
 	}
 	if p.Username != "" && p.Password != "" {
 		u.User = url.UserPassword(p.Username, p.Password)
+	}
+	if len(p.Extra) > 0 {
+		q := make(url.Values, len(p.Extra))
+		for k, v := range p.Extra {
+			q.Set(k, v)
+		}
+		// url.Values.Encode() 按 key 排序，保证同一节点每次生成的字符串一致，
+		// 否则会击穿 httpclient 以 URL 字符串为键的 transport 缓存。
+		u.RawQuery = q.Encode()
 	}
 	return u.String()
 }

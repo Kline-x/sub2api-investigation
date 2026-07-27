@@ -34830,6 +34830,7 @@ type ProxyMutation struct {
 	fallback_mode       *string
 	expiry_warn_days    *int
 	addexpiry_warn_days *int
+	extra               *map[string]string
 	clearedFields       map[string]struct{}
 	accounts            map[int64]struct{}
 	removedaccounts     map[int64]struct{}
@@ -35548,6 +35549,55 @@ func (m *ProxyMutation) ResetExpiryWarnDays() {
 	m.addexpiry_warn_days = nil
 }
 
+// SetExtra sets the "extra" field.
+func (m *ProxyMutation) SetExtra(value map[string]string) {
+	m.extra = &value
+}
+
+// Extra returns the value of the "extra" field in the mutation.
+func (m *ProxyMutation) Extra() (r map[string]string, exists bool) {
+	v := m.extra
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExtra returns the old "extra" field's value of the Proxy entity.
+// If the Proxy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxyMutation) OldExtra(ctx context.Context) (v map[string]string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExtra is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExtra requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExtra: %w", err)
+	}
+	return oldValue.Extra, nil
+}
+
+// ClearExtra clears the value of the "extra" field.
+func (m *ProxyMutation) ClearExtra() {
+	m.extra = nil
+	m.clearedFields[proxy.FieldExtra] = struct{}{}
+}
+
+// ExtraCleared returns if the "extra" field was cleared in this mutation.
+func (m *ProxyMutation) ExtraCleared() bool {
+	_, ok := m.clearedFields[proxy.FieldExtra]
+	return ok
+}
+
+// ResetExtra resets all changes to the "extra" field.
+func (m *ProxyMutation) ResetExtra() {
+	m.extra = nil
+	delete(m.clearedFields, proxy.FieldExtra)
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by ids.
 func (m *ProxyMutation) AddAccountIDs(ids ...int64) {
 	if m.accounts == nil {
@@ -35663,7 +35713,7 @@ func (m *ProxyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxyMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 15)
 	if m.created_at != nil {
 		fields = append(fields, proxy.FieldCreatedAt)
 	}
@@ -35706,6 +35756,9 @@ func (m *ProxyMutation) Fields() []string {
 	if m.expiry_warn_days != nil {
 		fields = append(fields, proxy.FieldExpiryWarnDays)
 	}
+	if m.extra != nil {
+		fields = append(fields, proxy.FieldExtra)
+	}
 	return fields
 }
 
@@ -35742,6 +35795,8 @@ func (m *ProxyMutation) Field(name string) (ent.Value, bool) {
 		return m.BackupProxyID()
 	case proxy.FieldExpiryWarnDays:
 		return m.ExpiryWarnDays()
+	case proxy.FieldExtra:
+		return m.Extra()
 	}
 	return nil, false
 }
@@ -35779,6 +35834,8 @@ func (m *ProxyMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldBackupProxyID(ctx)
 	case proxy.FieldExpiryWarnDays:
 		return m.OldExpiryWarnDays(ctx)
+	case proxy.FieldExtra:
+		return m.OldExtra(ctx)
 	}
 	return nil, fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -35886,6 +35943,13 @@ func (m *ProxyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetExpiryWarnDays(v)
 		return nil
+	case proxy.FieldExtra:
+		v, ok := value.(map[string]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExtra(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
 }
@@ -35958,6 +36022,9 @@ func (m *ProxyMutation) ClearedFields() []string {
 	if m.FieldCleared(proxy.FieldBackupProxyID) {
 		fields = append(fields, proxy.FieldBackupProxyID)
 	}
+	if m.FieldCleared(proxy.FieldExtra) {
+		fields = append(fields, proxy.FieldExtra)
+	}
 	return fields
 }
 
@@ -35986,6 +36053,9 @@ func (m *ProxyMutation) ClearField(name string) error {
 		return nil
 	case proxy.FieldBackupProxyID:
 		m.ClearBackupProxyID()
+		return nil
+	case proxy.FieldExtra:
+		m.ClearExtra()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy nullable field %s", name)
@@ -36036,6 +36106,9 @@ func (m *ProxyMutation) ResetField(name string) error {
 		return nil
 	case proxy.FieldExpiryWarnDays:
 		m.ResetExpiryWarnDays()
+		return nil
+	case proxy.FieldExtra:
+		m.ResetExtra()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy field %s", name)
