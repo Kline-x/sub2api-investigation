@@ -4,6 +4,8 @@
 // 直接使用 url.Parse 处理代理 URL 是被禁止的。
 // 这确保了 fail-fast 行为：无效代理配置在创建时立即失败，
 // 而不是在运行时静默回退到直连（产生 IP 关联风险）。
+//
+// 支持的协议：http、https、socks5、socks5h、ss（shadowsocks，定制功能）。
 package proxyurl
 
 import (
@@ -18,6 +20,8 @@ var allowedSchemes = map[string]bool{
 	"https":   true,
 	"socks5":  true,
 	"socks5h": true,
+	// ss: shadowsocks（定制功能，合并上游时勿丢）
+	"ss": true,
 }
 
 // Parse 解析并验证代理 URL。
@@ -31,8 +35,8 @@ var allowedSchemes = map[string]bool{
 //   - TrimSpace 后为空视为直连
 //   - url.Parse 失败返回 error（不含原始 URL，防凭据泄露）
 //   - Host 为空返回 error（用 Redacted() 脱敏）
-//   - Scheme 必须为 http/https/socks5/socks5h
-//   - socks5:// 自动升级为 socks5h://（确保 DNS 由代理端解析，防止 DNS 泄漏）
+//   - Scheme 必须为 http/https/socks5/socks5h/ss
+//   - socks5:// 自动升级为 socks5h://（确保 DNS 由代理端解析，防止 DNS 泄漏）；ss:// 不受此改写影响
 func Parse(raw string) (trimmed string, parsed *url.URL, err error) {
 	trimmed = strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -51,7 +55,7 @@ func Parse(raw string) (trimmed string, parsed *url.URL, err error) {
 
 	scheme := strings.ToLower(parsed.Scheme)
 	if !allowedSchemes[scheme] {
-		return "", nil, fmt.Errorf("unsupported proxy scheme %q (allowed: http, https, socks5, socks5h)", scheme)
+		return "", nil, fmt.Errorf("unsupported proxy scheme %q (allowed: http, https, socks5, socks5h, ss)", scheme)
 	}
 
 	// 自动升级 socks5 → socks5h，确保 DNS 由代理端解析，防止 DNS 泄漏。

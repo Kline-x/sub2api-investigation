@@ -4,6 +4,7 @@
 //   - HTTP/HTTPS: 通过 Transport.Proxy 设置
 //   - SOCKS5: 通过 Transport.DialContext 设置（客户端本地解析 DNS）
 //   - SOCKS5H: 通过 Transport.DialContext 设置（代理端远程解析 DNS，推荐）
+//   - ss (shadowsocks，定制功能): 通过 Transport.DialContext 设置
 //
 // 注意：proxyurl.Parse() 会自动将 socks5:// 升级为 socks5h://，
 // 确保 DNS 也由代理端解析，防止 DNS 泄漏。
@@ -18,6 +19,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/proxy"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/shadowsocks"
 )
 
 // ConfigureTransportProxy 根据代理 URL 配置 Transport
@@ -26,6 +29,8 @@ import (
 //   - http/https: 设置 transport.Proxy
 //   - socks5: 设置 transport.DialContext（客户端本地解析 DNS）
 //   - socks5h: 设置 transport.DialContext（代理端远程解析 DNS，推荐）
+//   - ss: 设置 transport.DialContext（shadowsocks，定制功能）；配置或 dialer 创建失败时
+//     直接返回 error，不设置 DialContext，禁止退化为直连
 //
 // 参数：
 //   - transport: 需要配置的 http.Transport
@@ -59,6 +64,18 @@ func ConfigureTransportProxy(transport *http.Transport, proxyURL *url.URL) error
 				return dialer.Dial(network, addr)
 			}
 		}
+		return nil
+
+	case "ss":
+		cfg, err := shadowsocks.ConfigFromURL(proxyURL)
+		if err != nil {
+			return err
+		}
+		dialer, err := shadowsocks.NewDialer(cfg)
+		if err != nil {
+			return err
+		}
+		transport.DialContext = dialer.DialContext
 		return nil
 
 	default:
