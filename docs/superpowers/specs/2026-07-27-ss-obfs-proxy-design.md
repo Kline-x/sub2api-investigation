@@ -154,6 +154,21 @@ query 参数拼接需保证**顺序稳定**（按 key 排序），否则同一�
 
 附带正确性：`httpclient` 的 transport 缓存键使用完整 URL 字符串，因此 obfs-host 不同即视为不同 transport，不会错误复用。
 
+> ⚠️ **实施后修正（2026-07-27）**：上面「下游全链路无感」这个假设**是错的**，实测被打脸。
+>
+> `repository/http_upstream.go` 的 `normalizeProxyURL` 为算连接池缓存键而做 URL 归一化，
+> 其中有一行 `parsed.RawQuery = ""`，且它返回的**同一个** `parsed` 又被拿去建 transport。
+> 于是 obfs 参数在进入拨号层之前就被抹掉，建出**裸 ss 连接**，被要求 obfs 的服务端静默丢弃，
+> 表现为 `Post ...: EOF`。
+>
+> 更麻烦的是它的**可观测性极差**：代理延迟探测、订阅导入、全部单元测试、甚至 TLS 指纹路径
+> 都正常，只有走 `httpUpstream.Do` 的真实转发与账号测试失败。排查时先后误判为 TLS 指纹、
+> 节点限流、DNS 解析，最终靠在 ss dialer 里加临时日志打出 `obfs=""` 才定位。
+>
+> **教训**：「参数走 query，下游无感」不是可以假设的，必须**枚举并逐个验证所有会重写代理 URL 的下游**。
+> 修复：删除该行并在缓存键中保留 query（同时解决了 obfs 参数不同的节点共用连接池的隐患）。
+> 回归测试 `http_upstream_proxy_query_test.go`，并已列入 CUSTOM_CHANGES 的合并上游必查清单。
+
 ### 5.4 迁移
 
 项目迁移机制为「编号 SQL 文件 + SHA256 校验，启动时自动执行」（`internal/repository/migrations_runner.go`）。

@@ -186,6 +186,7 @@
 
 | 必查点 | 丢失后的后果 |
 |---|---|
+| **`repository/http_upstream.go`：`normalizeProxyURL` 不得清空 `RawQuery`** | **实战踩过的坑，症状最隐蔽。** 该函数为算连接池缓存键做 URL 归一化，原本有一行 `parsed.RawQuery = ""`，而它返回的**同一个** `parsed` 又被用来建 transport。ss 节点的 obfs 插件参数（`plugin`/`mode`/`obfs-host`）正挂在 query 上，被清掉后建出的是**裸 ss 连接**——要求 obfs 的服务端静默丢弃，表现为 `Post ...: EOF`。代理延迟测试、订阅导入、单元测试全部正常，只有真实转发失败，极难定位。保留 query 同时保证了连接池隔离（obfs 参数不同的节点不会共用同一个池）。回归测试见 `http_upstream_proxy_query_test.go` |
 | `repository/proxy_repo.go`：`SetExtra` / `ClearExtra` / `proxyEntityToService` 中的 `Extra` | obfs 参数不入库或不出库。代理看起来正常，但拨号时没有 obfs 层 → 节点被墙，症状是「连不上，日志只有超时」 |
 | **`service/admin_proxy.go`：`UpdateProxy` 里的 `if input.Extra != nil` 守卫** | **全改动里最脆的一行。** 它防的是「不带 Extra 的普通编辑请求（如面板的 `UpdateProxyRequest`）把 obfs 参数清空」。若合并时被改成无条件 `proxy.Extra = input.Extra`，管理员在面板编辑一次 ss 代理（哪怕只改个备注）→ obfs 参数被清空 → 节点静默失效。回归测试见 `service/admin_proxy_extra_test.go`，该文件必须一起保留 |
 | `service/admin_service.go`：`CreateProxyInput.Extra` / `UpdateProxyInput.Extra` | 上面两条的传输载体；字段没了则 handler 传不进 service，obfs 参数永远进不到库里 |

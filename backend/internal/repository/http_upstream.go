@@ -1181,12 +1181,17 @@ func normalizeProxyURL(raw string) (string, *url.URL, error) {
 	if parsed == nil {
 		return directProxyKey, nil, nil
 	}
-	// 规范化：小写 scheme/host，去除路径和查询参数
+	// 规范化：小写 scheme/host，去除路径与 fragment。
+	//
+	// 注意：**不能清除 RawQuery**。query 承载协议扩展参数——shadowsocks 节点的
+	// obfs 插件配置（plugin/mode/obfs-host）就挂在这里。清掉之后建出的是裸 ss
+	// 连接，而要求 obfs 的服务端会直接丢弃，表现为难以定位的 EOF。
+	// 保留 query 同时保证了连接池隔离：obfs 参数不同的节点不会共用同一个池。
+	// Proxy.URL() 已按 key 排序生成 query，字符串稳定，可安全用作缓存键。
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 	parsed.Host = strings.ToLower(parsed.Host)
 	parsed.Path = ""
 	parsed.RawPath = ""
-	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	parsed.ForceQuery = false
 	if hostname := parsed.Hostname(); hostname != "" {
