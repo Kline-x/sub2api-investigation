@@ -21,7 +21,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # GitHub raw content base URL
-GITHUB_RAW_URL="https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy"
+# 必须指向本仓库（定制分支）。指向上游 Wei-Shaw/sub2api 会下载到上游的
+# compose 文件，进而拉上游镜像，部署出来的不是本仓库的版本。
+GITHUB_RAW_URL="https://raw.githubusercontent.com/Kline-x/sub2api-investigation/main/deploy"
 
 # Print colored message
 print_info() {

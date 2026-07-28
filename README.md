@@ -19,15 +19,56 @@
 
 ## 部署
 
+### 一键部署（推荐）
+
+已克隆仓库：
+
+```bash
+bash deploy/quick-start.sh
+```
+
+未克隆仓库：
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Kline-x/sub2api-investigation/main/deploy/quick-start.sh | bash
+```
+
+脚本自动生成全部密钥、拉镜像起栈、等待就绪，最后打印访问地址和管理员账号密码。冷启动约 30~60 秒。
+
+常用变量：
+
+```bash
+SUB2API_PORT=9000 bash deploy/quick-start.sh    # 换宿主机端口（默认 8080）
+```
+
+**重复执行本脚本 = 升级到最新镜像**，数据和密钥都保留（`.env` 存在时不会被覆盖）。密钥都在部署目录的 `.env` 里，注意备份。
+
 ### 镜像
 
 ```
-ghcr.io/kline-x/sub2api:<版本>    # 如 0.1.156-custom.2
-ghcr.io/kline-x/sub2api:latest```
+ghcr.io/kline-x/sub2api:<版本>    # 如 0.1.163-custom.1
+ghcr.io/kline-x/sub2api:latest
+```
 
 公开镜像，`docker pull` 免登录。仅 linux/amd64。
 
-### Docker Compose（推荐）
+> `latest` 始终指向最近发布的 `-custom.N` 版本。**不要用上游的 `weishaw/sub2api`**——那是原仓库镜像，没有本仓库的定制功能，面板更新源也会指向上游。
+
+### 手动 Docker Compose
+
+想自己控制配置时用这个。先在空目录里生成 `.env`：
+
+```bash
+cat > .env <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+JWT_SECRET=$(openssl rand -hex 32)
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=$(openssl rand -hex 12)
+EOF
+chmod 600 .env
+```
+
+再在同目录写 `docker-compose.yml`：
 
 ```yaml
 services:
@@ -45,14 +86,16 @@ services:
       - DATABASE_HOST=db
       - DATABASE_PORT=5432
       - DATABASE_USER=sub2api
-      - DATABASE_PASSWORD=<改成强密码>
+      # 应用连库和下面 db 容器初始化引用的是同一个变量，不会写不一致
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:?请先生成 .env}
       - DATABASE_DBNAME=sub2api
       - DATABASE_SSLMODE=disable
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - ADMIN_EMAIL=<管理员邮箱>
-      - ADMIN_PASSWORD=<管理员密码>
-      - JWT_SECRET=<至少32字节的随机串>   # 不足32字节启动直接失败
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@sub2api.local}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # 不足 32 字节启动直接失败；openssl rand -hex 32 出来是 64 字节，够用
+      - JWT_SECRET=${JWT_SECRET:?请先生成 .env}
       - TZ=Asia/Shanghai
     depends_on:
       db:
@@ -65,7 +108,7 @@ services:
     restart: unless-stopped
     environment:
       - POSTGRES_USER=sub2api
-      - POSTGRES_PASSWORD=<与上面一致>
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?请先生成 .env}
       - POSTGRES_DB=sub2api
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -88,10 +131,21 @@ volumes:
 
 ```bash
 docker compose up -d
-# 首次启动自动建表并创建管理员,浏览器访问 http://<主机>:8080 登录
+# 首次启动自动建表并创建管理员，约 30~60 秒后浏览器访问 http://<主机>:8080
+# 就绪判断：curl http://127.0.0.1:8080/health 返回 {"status":"ok"}
 ```
 
 更多环境变量（代理、OAuth client、图片并发等）参考 [`deploy/docker-compose.standalone.yml`](deploy/docker-compose.standalone.yml) 的注释。
+
+### 部署排障
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 容器反复重启，日志 `password authentication failed for user "sub2api"` | 应用侧和 postgres 侧密码不一致；或换了密码但复用了旧数据卷（卷里的密码是首次初始化时定下的） | 两处用同一个变量；换密码要连数据卷一起删：`docker compose down -v` |
+| 日志 `jwt.secret must be at least 32 bytes` | `JWT_SECRET` 太短 | 用 `openssl rand -hex 32` 生成 |
+| 起来了但功能不对、更新源指向上游 | 用了上游镜像 `weishaw/sub2api` | 改成 `ghcr.io/kline-x/sub2api:latest` |
+| 端口冲突 `port is already allocated` | 8080 被占 | 换端口，或 `SUB2API_PORT=9000 bash deploy/quick-start.sh` |
+| 访问 8080 无响应但容器没重启 | 冷启动还在跑迁移 | 等到 `/health` 返回 ok，最长约 60 秒 |
 
 ### 升级 / 回滚（日常，面板一键）
 

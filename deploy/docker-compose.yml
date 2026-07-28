@@ -16,7 +16,9 @@ services:
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: weishaw/sub2api:latest
+    # 本仓库是 Wei-Shaw/sub2api 的定制分支，镜像必须用我们自己发布的 GHCR 镜像；
+    # 指回上游的 weishaw/sub2api 会丢掉全部定制功能，且面板更新源也会指向上游。
+    image: ${SUB2API_IMAGE:-ghcr.io/kline-x/sub2api:latest}
     container_name: sub2api
     restart: unless-stopped
     ulimits:

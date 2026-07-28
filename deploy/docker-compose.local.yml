@@ -24,7 +24,8 @@ services:
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: weishaw/sub2api:latest
+    # 定制分支镜像，勿改回上游 weishaw/sub2api（见 docker-compose.yml 同处注释）
+    image: ${SUB2API_IMAGE:-ghcr.io/kline-x/sub2api:latest}
     container_name: sub2api
     restart: unless-stopped
     ulimits:
