@@ -1012,7 +1012,7 @@ const columns = computed<Column[]>(() => [
   { key: 'auth', label: t('admin.proxies.columns.auth'), sortable: false },
   { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
   { key: 'account_count', label: t('admin.proxies.columns.accounts'), sortable: true },
-  { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: false },
+  { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: true },
   { key: 'expiry', label: t('admin.proxies.columns.expiry'), sortable: true },
   { key: 'created_at', label: t('admin.proxies.columns.createdAt'), sortable: true },
   { key: 'status', label: t('admin.proxies.columns.status'), sortable: true },
@@ -1210,6 +1210,40 @@ const buildProxyQueryFilters = () => ({
   sort_order: sortState.sort_order
 })
 
+// 延迟不落库（探测结果在 Redis，查库后才补进来），后端无法按它排序。
+// 所以选中延迟排序时改走「拉全量 → 前端排序 → 本地分页」，其余排序仍走服务端。
+const CLIENT_SORTED_KEYS = new Set(['latency'])
+
+// 无延迟数据与探测失败的一律排在最后——无论升序降序。
+// "从未探测"不等于"最慢"，把它排到降序首位会误导。
+const sortByLatencyClientSide = (list: Proxy[], order: 'asc' | 'desc'): Proxy[] => {
+  const known: Proxy[] = []
+  const unknown: Proxy[] = []
+  for (const proxy of list) {
+    if (proxy.latency_status === 'failed' || typeof proxy.latency_ms !== 'number') {
+      unknown.push(proxy)
+    } else {
+      known.push(proxy)
+    }
+  }
+  known.sort((a, b) => {
+    const diff = (a.latency_ms as number) - (b.latency_ms as number)
+    if (diff !== 0) return order === 'asc' ? diff : -diff
+    return a.name.localeCompare(b.name)
+  })
+  unknown.sort((a, b) => a.name.localeCompare(b.name))
+  return [...known, ...unknown]
+}
+
+const loadProxiesClientSorted = async () => {
+  const all = await fetchAllProxiesForBatch()
+  const sorted = sortByLatencyClientSide(all, sortState.sort_order)
+  const start = (pagination.page - 1) * pagination.page_size
+  proxies.value = sorted.slice(start, start + pagination.page_size)
+  pagination.total = sorted.length
+  pagination.pages = Math.max(1, Math.ceil(sorted.length / pagination.page_size))
+}
+
 const loadProxies = async () => {
   if (abortController) {
     abortController.abort()
@@ -1218,6 +1252,10 @@ const loadProxies = async () => {
   abortController = currentAbortController
   loading.value = true
   try {
+    if (CLIENT_SORTED_KEYS.has(sortState.sort_by)) {
+      await loadProxiesClientSorted()
+      return
+    }
     const response = await adminAPI.proxies.list(
       pagination.page,
       pagination.page_size,
