@@ -112,6 +112,22 @@
                     {{ t('admin.proxies.testFailed') }}
                   </span>
                 </template>
+                <!-- 无本次测试结果时，回落到列表页探测/质量检测留下的持久化延迟 -->
+                <template v-else>
+                  <span
+                    v-if="proxy.latency_status === 'failed'"
+                    class="inline-flex flex-shrink-0 items-center rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                  >
+                    {{ t('admin.proxies.testFailed') }}
+                  </span>
+                  <span
+                    v-else-if="typeof proxy.latency_ms === 'number'"
+                    class="inline-flex flex-shrink-0 items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 dark:bg-dark-600 dark:text-gray-400"
+                  >
+                    <span v-if="proxy.country">{{ proxy.country }}</span>
+                    <span>{{ proxy.latency_ms }}ms</span>
+                  </span>
+                </template>
               </div>
               <div class="truncate text-xs text-gray-500 dark:text-gray-400">
                 {{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }}
@@ -223,15 +239,38 @@ const selectedLabel = computed(() => {
   return `${proxy.name} (${proxy.protocol}://${proxy.host}:${proxy.port})`
 })
 
-const filteredProxies = computed(() => {
-  if (!searchQuery.value) {
-    return props.proxies
+// 排序权重：本次测过的优先用测试结果，否则用持久化延迟。
+// 探测失败 / 没有延迟数据的排在最后，避免"没数据"被误当成"很快"。
+const latencyRank = (proxy: Proxy): number => {
+  const fresh = testResults[proxy.id]
+  if (fresh) {
+    if (!fresh.success) return Number.POSITIVE_INFINITY
+    if (typeof fresh.latency_ms === 'number') return fresh.latency_ms
   }
+  if (proxy.latency_status === 'failed') return Number.POSITIVE_INFINITY
+  if (typeof proxy.latency_ms === 'number') return proxy.latency_ms
+  return Number.POSITIVE_INFINITY
+}
+
+const filteredProxies = computed(() => {
   const query = searchQuery.value.toLowerCase()
-  return props.proxies.filter((proxy) => {
-    const name = proxy.name.toLowerCase()
-    const host = proxy.host.toLowerCase()
-    return name.includes(query) || host.includes(query)
+  const list = query
+    ? props.proxies.filter((proxy) => {
+        const name = proxy.name.toLowerCase()
+        const host = proxy.host.toLowerCase()
+        return name.includes(query) || host.includes(query)
+      })
+    : [...props.proxies]
+
+  // 默认按延迟升序：让"最快可用的节点"排在最前。
+  // 延迟相同（含都无数据）时按名称稳定排序，避免顺序随机跳动。
+  return list.sort((a, b) => {
+    const diff = latencyRank(a) - latencyRank(b)
+    if (diff !== 0 && Number.isFinite(diff)) return diff
+    const ra = latencyRank(a)
+    const rb = latencyRank(b)
+    if (ra !== rb) return ra === Number.POSITIVE_INFINITY ? 1 : -1
+    return a.name.localeCompare(b.name)
   })
 })
 

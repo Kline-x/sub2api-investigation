@@ -2355,7 +2355,12 @@ onMounted(async () => {
   loadUpstreamBillingProbeGlobalState()
 loadAccountPatrolState()
   try {
-    const [p, g] = await Promise.all([adminAPI.proxies.getAll(), adminAPI.groups.getAll()])
+    // 用 getAllWithCount：裸 getAll 不返回 latency_ms / quality_* / country，
+    // 代理选择器就无法展示延迟、也无法按延迟排序。
+    const [p, g] = await Promise.all([
+      adminAPI.proxies.getAllWithCount(),
+      adminAPI.groups.getAll()
+    ])
     proxies.value = p
     groups.value = g
   } catch (error) {
