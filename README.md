@@ -68,6 +68,8 @@ EOF
 chmod 600 .env
 ```
 
+> **想自己指定密码的话，别用带 `$` 的。** compose 会对 `.env` 里的值再插值一次：`ab$cd` 实际传进容器的是 `ab`，`$cd` 被当变量展开成空。而且不会报错——应用侧和 db 侧被同样截断，两边依旧一致，栈照常起来，你却以为密码是 `.env` 里写的那个。非要用就写成 `$$`（`ab$$cd` → `ab$cd`）。上面 `openssl rand -hex` 生成的是纯十六进制，不受影响。
+
 再在同目录写 `docker-compose.yml`：
 
 ```yaml
@@ -146,6 +148,8 @@ docker compose up -d
 | 起来了但功能不对、更新源指向上游 | 用了上游镜像 `weishaw/sub2api` | 改成 `ghcr.io/kline-x/sub2api:latest` |
 | 端口冲突 `port is already allocated` | 8080 被占 | 换端口，或 `SUB2API_PORT=9000 bash deploy/quick-start.sh` |
 | 访问 8080 无响应但容器没重启 | 冷启动还在跑迁移 | 等到 `/health` 返回 ok，最长约 60 秒 |
+| `docker compose` 直接报 `required variable POSTGRES_PASSWORD is missing a value` | `.env` 没生成，或该变量值为空 | 按上面的命令生成 `.env`；这是刻意的快失败，避免起来之后才暴露密码不一致 |
+| 密码看起来对但连库失败，或密码比设置的短 | `.env` 里的密码含未转义的 `$`，被 compose 展开 | 改用不含 `$` 的密码，或写成 `$$` |
 
 ### 升级 / 回滚（日常，面板一键）
 
