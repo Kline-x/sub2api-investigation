@@ -398,6 +398,10 @@ func TestAccountTestService_OpenAI429WithoutResetSignalDoesNotMutateRuntimeState
 }
 
 func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
+	// 定制行为：测试路径 HTTP 401 / 非 429 失败**直接永久 SetError**，
+	// 不再走上游的 ratelimit 401 处理（那条路产生 "Authentication failed (401)"）。
+	// 见 CUSTOM_CHANGES「测试失败/Grok 非429请求错误直接置错」。
+	// 合并上游时若此断言被改回 "Authentication failed (401)"，说明定制被覆盖。
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
 
@@ -418,7 +422,7 @@ func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
 	require.Equal(t, account.ID, repo.setErrorID)
-	require.Contains(t, repo.setErrorMsg, "Authentication failed (401)")
+	require.Contains(t, repo.setErrorMsg, "API returned 401")
 	require.Zero(t, repo.rateLimitedID)
 	require.Zero(t, repo.clearedErrorID)
 	require.Nil(t, account.RateLimitResetAt)
