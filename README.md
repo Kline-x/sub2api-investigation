@@ -139,6 +139,47 @@ docker compose up -d
 
 更多环境变量（代理、OAuth client、图片并发等）参考 [`deploy/docker-compose.standalone.yml`](deploy/docker-compose.standalone.yml) 的注释。
 
+### 复用已有的 PostgreSQL / Redis
+
+已经有一套在跑、想换成正式部署又不想丢数据时用这个。用 [`docker-compose.standalone.yml`](deploy/docker-compose.standalone.yml)（只起应用，不带 db/redis），叠加 [`docker-compose.external-network.yml`](deploy/docker-compose.external-network.yml) 接入 db/redis 所在的网络。
+
+> **`standalone.yml` 单用是不够的**：它没有 `networks:` 段。如果 db/redis 跑在另一套 compose 栈里、只在该栈网络内暴露端口（`docker ps` 看不到宿主机映射），新容器不进那个网络就解析不到 `postgres`，所以需要叠加 override。
+
+以旧栈名为 `s2a-test`（网络 `s2a-test_default`，服务名 `postgres`/`redis`，端口 8900）为例：
+
+```bash
+# 1. 备份（建议）
+docker exec s2a-test-postgres-1 pg_dump -U sub2api sub2api > ~/s2a-backup.sql
+```
+
+```bash
+# 2. 建目录并生成 .env——JWT/TOTP 密钥直接从旧容器抄，不要重新生成
+mkdir -p ~/s2a && cd ~/s2a
+cp <仓库>/deploy/docker-compose.standalone.yml <仓库>/deploy/docker-compose.external-network.yml .
+docker inspect s2a-test --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E "^(JWT_SECRET|TOTP_ENCRYPTION_KEY|ADMIN_EMAIL)=" > .env
+printf 'DATABASE_HOST=postgres\nDATABASE_USER=sub2api\nDATABASE_PASSWORD=<原密码>\nDATABASE_DBNAME=sub2api\nREDIS_HOST=redis\nSERVER_PORT=8900\n' >> .env
+```
+
+```bash
+# 3. 只停旧应用，db/redis 不动
+docker rm -f s2a-test
+```
+
+```bash
+# 4. 起新的
+cd ~/s2a
+EXTERNAL_NETWORK=s2a-test_default docker compose \
+  -f docker-compose.standalone.yml -f docker-compose.external-network.yml \
+  -p s2a up -d
+```
+
+原账号密码照常登录，账号、代理节点、绑定关系全部保留。回滚：`docker rm -f sub2api` 后把原来的启动方式跑回去——db/redis 全程没动过。
+
+> ⚠️ **`JWT_SECRET` 和 `TOTP_ENCRYPTION_KEY` 必须沿用原值**。前者变了所有人登录态失效，后者变了已配置的 2FA 全部失效（用户登不进来）。上面第 2 步的 `docker inspect` 就是干这个的，别图省事重新生成。
+>
+> 另外确认新旧版本的 schema 兼容——同一 `X.Y.Z` 基线内的 `-custom.N` 之间没问题；跨基线升级前先看 [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md)。
+
 ### 部署排障
 
 | 现象 | 原因 | 处理 |
@@ -150,6 +191,8 @@ docker compose up -d
 | 访问 8080 无响应但容器没重启 | 冷启动还在跑迁移 | 等到 `/health` 返回 ok，最长约 60 秒 |
 | `docker compose` 直接报 `required variable POSTGRES_PASSWORD is missing a value` | `.env` 没生成，或该变量值为空 | 按上面的命令生成 `.env`；这是刻意的快失败，避免起来之后才暴露密码不一致 |
 | 密码看起来对但连库失败，或密码比设置的短 | `.env` 里的密码含未转义的 `$`，被 compose 展开 | 改用不含 `$` 的密码，或写成 `$$` |
+| 用 standalone 接外部库，日志报 `no such host` / DNS 解析失败 | 容器不在 db/redis 所在的 docker 网络里 | 叠加 `docker-compose.external-network.yml`，见「复用已有的 PostgreSQL / Redis」 |
+| 换部署方式后所有人被登出，或 2FA 全部失效 | 复用旧库但 `JWT_SECRET` / `TOTP_ENCRYPTION_KEY` 重新生成了 | 从旧容器抄回原值重启 |
 
 ### 升级 / 回滚（日常，面板一键）
 
