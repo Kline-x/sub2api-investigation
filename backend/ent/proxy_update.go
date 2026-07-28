@@ -247,6 +247,18 @@ func (_u *ProxyUpdate) AddExpiryWarnDays(v int) *ProxyUpdate {
 	return _u
 }
 
+// SetExtra sets the "extra" field.
+func (_u *ProxyUpdate) SetExtra(v map[string]string) *ProxyUpdate {
+	_u.mutation.SetExtra(v)
+	return _u
+}
+
+// ClearExtra clears the value of the "extra" field.
+func (_u *ProxyUpdate) ClearExtra() *ProxyUpdate {
+	_u.mutation.ClearExtra()
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdate) AddAccountIDs(ids ...int64) *ProxyUpdate {
 	_u.mutation.AddAccountIDs(ids...)
@@ -446,6 +458,12 @@ func (_u *ProxyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedExpiryWarnDays(); ok {
 		_spec.AddField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.Extra(); ok {
+		_spec.SetField(proxy.FieldExtra, field.TypeJSON, value)
+	}
+	if _u.mutation.ExtraCleared() {
+		_spec.ClearField(proxy.FieldExtra, field.TypeJSON)
 	}
 	if _u.mutation.AccountsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -759,6 +777,18 @@ func (_u *ProxyUpdateOne) AddExpiryWarnDays(v int) *ProxyUpdateOne {
 	return _u
 }
 
+// SetExtra sets the "extra" field.
+func (_u *ProxyUpdateOne) SetExtra(v map[string]string) *ProxyUpdateOne {
+	_u.mutation.SetExtra(v)
+	return _u
+}
+
+// ClearExtra clears the value of the "extra" field.
+func (_u *ProxyUpdateOne) ClearExtra() *ProxyUpdateOne {
+	_u.mutation.ClearExtra()
+	return _u
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_u *ProxyUpdateOne) AddAccountIDs(ids ...int64) *ProxyUpdateOne {
 	_u.mutation.AddAccountIDs(ids...)
@@ -988,6 +1018,12 @@ func (_u *ProxyUpdateOne) sqlSave(ctx context.Context) (_node *Proxy, err error)
 	}
 	if value, ok := _u.mutation.AddedExpiryWarnDays(); ok {
 		_spec.AddField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.Extra(); ok {
+		_spec.SetField(proxy.FieldExtra, field.TypeJSON, value)
+	}
+	if _u.mutation.ExtraCleared() {
+		_spec.ClearField(proxy.FieldExtra, field.TypeJSON)
 	}
 	if _u.mutation.AccountsCleared() {
 		edge := &sqlgraph.EdgeSpec{

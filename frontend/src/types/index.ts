@@ -752,7 +752,7 @@ export interface UpdateGroupRequest {
 export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
-export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
+export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h' | 'ss'
 
 // Claude Model type (returned by /v1/models and account models API)
 export interface ClaudeModel {
@@ -789,6 +789,7 @@ export interface Proxy {
   fallback_mode: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
   expiry_warn_days: number
+  extra?: Record<string, string> | null // 协议扩展参数(如 ss 的 plugin/obfs 参数)
   created_at: string
   updated_at: string
 }
@@ -1293,6 +1294,23 @@ export interface UpdateProxyRequest {
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
   expiry_warn_days?: number
+}
+
+// 机场订阅导入代理
+export interface ImportProxySubscriptionRequest {
+  url: string
+  dry_run: boolean
+}
+
+export interface ImportProxySubscriptionSkipped {
+  name: string
+  reason: string
+}
+
+export interface ImportProxySubscriptionResult {
+  created: number
+  updated: number
+  skipped: ImportProxySubscriptionSkipped[]
 }
 
 export interface AdminDataPayload {

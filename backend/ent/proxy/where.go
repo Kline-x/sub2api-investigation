@@ -890,6 +890,16 @@ func ExpiryWarnDaysLTE(v int) predicate.Proxy {
 	return predicate.Proxy(sql.FieldLTE(FieldExpiryWarnDays, v))
 }
 
+// ExtraIsNil applies the IsNil predicate on the "extra" field.
+func ExtraIsNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldIsNull(FieldExtra))
+}
+
+// ExtraNotNil applies the NotNil predicate on the "extra" field.
+func ExtraNotNil() predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotNull(FieldExtra))
+}
+
 // HasAccounts applies the HasEdge predicate on the "accounts" edge.
 func HasAccounts() predicate.Proxy {
 	return predicate.Proxy(func(s *sql.Selector) {

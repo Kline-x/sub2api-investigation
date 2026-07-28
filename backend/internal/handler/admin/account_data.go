@@ -39,18 +39,19 @@ type DataPayload struct {
 }
 
 type DataProxy struct {
-	ProxyKey        string `json:"proxy_key"`
-	Name            string `json:"name"`
-	Protocol        string `json:"protocol"`
-	Host            string `json:"host"`
-	Port            int    `json:"port"`
-	Username        string `json:"username,omitempty"`
-	Password        string `json:"password,omitempty"`
-	Status          string `json:"status"`
-	ExpiresAt       *int64 `json:"expires_at,omitempty"`        // unix 秒，与 DataAccount.ExpiresAt 风格一致
-	FallbackMode    string `json:"fallback_mode,omitempty"`     // none/direct/proxy
-	BackupProxyName string `json:"backup_proxy_name,omitempty"` // 备用代理 name（跨实例按 name 反查）
-	ExpiryWarnDays  int    `json:"expiry_warn_days,omitempty"`
+	ProxyKey        string            `json:"proxy_key"`
+	Name            string            `json:"name"`
+	Protocol        string            `json:"protocol"`
+	Host            string            `json:"host"`
+	Port            int               `json:"port"`
+	Username        string            `json:"username,omitempty"`
+	Password        string            `json:"password,omitempty"`
+	Status          string            `json:"status"`
+	ExpiresAt       *int64            `json:"expires_at,omitempty"`        // unix 秒，与 DataAccount.ExpiresAt 风格一致
+	FallbackMode    string            `json:"fallback_mode,omitempty"`     // none/direct/proxy
+	BackupProxyName string            `json:"backup_proxy_name,omitempty"` // 备用代理 name（跨实例按 name 反查）
+	ExpiryWarnDays  int               `json:"expiry_warn_days,omitempty"`
+	Extra           map[string]string `json:"extra,omitempty"` // 协议专属参数（如 ss 的 cipher/plugin）
 }
 
 // DataAccount 是管理员显式备份导出使用的账号结构，故意不走 dto.Account 的脱敏路径，
@@ -187,6 +188,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			FallbackMode:    p.FallbackMode,
 			BackupProxyName: backupProxyName,
 			ExpiryWarnDays:  p.ExpiryWarnDays,
+			Extra:           p.Extra,
 		})
 	}
 
@@ -365,6 +367,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			FallbackMode:   fallbackMode,
 			BackupProxyID:  backupProxyID,
 			ExpiryWarnDays: item.ExpiryWarnDays,
+			Extra:          item.Extra,
 		})
 		if createErr != nil {
 			result.ProxyFailed++
@@ -685,7 +688,7 @@ func validateDataProxy(item DataProxy) error {
 		return errors.New("proxy port is invalid")
 	}
 	switch item.Protocol {
-	case "http", "https", "socks5", "socks5h":
+	case "http", "https", "socks5", "socks5h", "ss":
 	default:
 		return fmt.Errorf("proxy protocol is invalid: %s", item.Protocol)
 	}

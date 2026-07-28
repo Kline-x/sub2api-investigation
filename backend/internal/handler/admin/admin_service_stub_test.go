@@ -28,6 +28,8 @@ type stubAdminService struct {
 	updatedProxyIDs                     []int64
 	updatedProxies                      []*service.UpdateProxyInput
 	testedProxyIDs                      []int64
+	checkProxyExistsResult              bool
+	checkProxyExistsErr                 error
 	getUserErr                          error
 	createAccountErr                    error
 	createSparkShadowErr                error
@@ -592,7 +594,10 @@ func (s *stubAdminService) GetProxyAccounts(ctx context.Context, proxyID int64) 
 }
 
 func (s *stubAdminService) CheckProxyExists(ctx context.Context, host string, port int, username, password string) (bool, error) {
-	return false, nil
+	if s.checkProxyExistsErr != nil {
+		return false, s.checkProxyExistsErr
+	}
+	return s.checkProxyExistsResult, nil
 }
 
 func (s *stubAdminService) TestProxy(ctx context.Context, id int64) (*service.ProxyTestResult, error) {

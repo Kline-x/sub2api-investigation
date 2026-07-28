@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -45,6 +46,8 @@ type Proxy struct {
 	BackupProxyID *int64 `json:"backup_proxy_id,omitempty"`
 	// Days before expiry to flag as expiring-soon (per proxy).
 	ExpiryWarnDays int `json:"expiry_warn_days,omitempty"`
+	// Protocol-specific extra parameters (e.g. shadowsocks plugin opts).
+	Extra map[string]string `json:"extra,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the ProxyQuery when eager-loading is set.
 	Edges        ProxyEdges `json:"edges"`
@@ -87,6 +90,8 @@ func (*Proxy) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case proxy.FieldExtra:
+			values[i] = new([]byte)
 		case proxy.FieldID, proxy.FieldPort, proxy.FieldBackupProxyID, proxy.FieldExpiryWarnDays:
 			values[i] = new(sql.NullInt64)
 		case proxy.FieldName, proxy.FieldProtocol, proxy.FieldHost, proxy.FieldUsername, proxy.FieldPassword, proxy.FieldStatus, proxy.FieldFallbackMode:
@@ -203,6 +208,14 @@ func (_m *Proxy) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ExpiryWarnDays = int(value.Int64)
 			}
+		case proxy.FieldExtra:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field extra", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Extra); err != nil {
+					return fmt.Errorf("unmarshal field extra: %w", err)
+				}
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -300,6 +313,9 @@ func (_m *Proxy) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("expiry_warn_days=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ExpiryWarnDays))
+	builder.WriteString(", ")
+	builder.WriteString("extra=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Extra))
 	builder.WriteByte(')')
 	return builder.String()
 }

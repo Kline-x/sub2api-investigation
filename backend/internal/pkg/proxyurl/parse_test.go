@@ -213,3 +213,26 @@ func TestParse_无Scheme裸地址(t *testing.T) {
 		t.Fatal("无 scheme 的裸地址应返回错误")
 	}
 }
+
+func TestParse_接受ss协议(t *testing.T) {
+	trimmed, parsed, err := Parse("ss://chacha20-ietf-poly1305:pwd@node.example.com:443?plugin=obfs&mode=tls&obfs-host=bing.com")
+	if err != nil {
+		t.Fatalf("ss 应被接受: %v", err)
+	}
+	if parsed.Scheme != "ss" {
+		t.Errorf("Scheme = %q, want ss", parsed.Scheme)
+	}
+	if parsed.Query().Get("mode") != "tls" {
+		t.Errorf("query 未保留: %q", trimmed)
+	}
+}
+
+func TestParse_ss不被升级为socks5h(t *testing.T) {
+	_, parsed, err := Parse("ss://c:p@h:443")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parsed.Scheme != "ss" {
+		t.Errorf("ss 不应被改写, got %q", parsed.Scheme)
+	}
+}

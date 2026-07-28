@@ -12,7 +12,8 @@ import type {
   UpdateProxyRequest,
   PaginatedResponse,
   AdminDataPayload,
-  AdminDataImportResult
+  AdminDataImportResult,
+  ImportProxySubscriptionResult
 } from '@/types'
 
 /**
@@ -255,6 +256,23 @@ export async function importData(payload: {
   return data
 }
 
+/**
+ * Import proxies from an airport subscription URL (Clash format, ss nodes only)
+ * @param url - Subscription URL (sensitive: never logged, never persisted client-side)
+ * @param dryRun - When true, only reports what would be created/updated without writing
+ * @returns Import result with created/updated counts and skipped nodes with reasons
+ */
+export async function importSubscription(
+  url: string,
+  dryRun: boolean
+): Promise<ImportProxySubscriptionResult> {
+  const { data } = await apiClient.post<ImportProxySubscriptionResult>(
+    '/admin/proxies/import-subscription',
+    { url, dry_run: dryRun }
+  )
+  return data
+}
+
 export const proxiesAPI = {
   list,
   getAll,
@@ -271,7 +289,8 @@ export const proxiesAPI = {
   batchCreate,
   batchDelete,
   exportData,
-  importData
+  importData,
+  importSubscription
 }
 
 export default proxiesAPI

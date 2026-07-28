@@ -76,6 +76,10 @@
             <button @click="showImportData = true" class="btn btn-secondary">
               {{ t('admin.proxies.dataImport') }}
             </button>
+            <button @click="showImportSubscription = true" class="btn btn-secondary">
+              <Icon name="download" size="md" class="mr-2" />
+              {{ t('admin.proxies.importSubscription') }}
+            </button>
             <button @click="showExportDataDialog = true" class="btn btn-secondary">
               {{ selectedCount > 0 ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
             </button>
@@ -466,7 +470,7 @@
           </div>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.proxies.username') }}</label>
+          <label class="input-label">{{ createUsernameLabel }}</label>
           <input
             v-model="createForm.username"
             type="text"
@@ -699,7 +703,7 @@
           </div>
         </div>
         <div>
-          <label class="input-label">{{ t('admin.proxies.username') }}</label>
+          <label class="input-label">{{ editUsernameLabel }}</label>
           <input v-model="editForm.username" type="text" class="input" />
         </div>
         <div>
@@ -840,6 +844,12 @@
       @imported="handleDataImported"
     />
 
+    <ImportSubscriptionModal
+      :show="showImportSubscription"
+      @close="showImportSubscription = false"
+      @imported="handleSubscriptionImported"
+    />
+
     <BaseDialog
       :show="showQualityReportDialog"
       :title="t('admin.proxies.qualityReportTitle')"
@@ -978,6 +988,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ImportDataModal from '@/components/admin/proxy/ImportDataModal.vue'
+import ImportSubscriptionModal from '@/components/admin/proxy/ImportSubscriptionModal.vue'
 import Select from '@/components/common/Select.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -1001,7 +1012,7 @@ const columns = computed<Column[]>(() => [
   { key: 'auth', label: t('admin.proxies.columns.auth'), sortable: false },
   { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
   { key: 'account_count', label: t('admin.proxies.columns.accounts'), sortable: true },
-  { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: false },
+  { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: true },
   { key: 'expiry', label: t('admin.proxies.columns.expiry'), sortable: true },
   { key: 'created_at', label: t('admin.proxies.columns.createdAt'), sortable: true },
   { key: 'status', label: t('admin.proxies.columns.status'), sortable: true },
@@ -1014,7 +1025,8 @@ const protocolOptions = computed(() => [
   { value: 'http', label: 'HTTP' },
   { value: 'https', label: 'HTTPS' },
   { value: 'socks5', label: 'SOCKS5' },
-  { value: 'socks5h', label: 'SOCKS5H' }
+  { value: 'socks5h', label: 'SOCKS5H' },
+  { value: 'ss', label: 'SS' }
 ])
 
 const statusOptions = computed(() => [
@@ -1029,13 +1041,23 @@ const protocolSelectOptions = computed(() => [
   { value: 'http', label: t('admin.proxies.protocols.http') },
   { value: 'https', label: t('admin.proxies.protocols.https') },
   { value: 'socks5', label: t('admin.proxies.protocols.socks5') },
-  { value: 'socks5h', label: t('admin.proxies.protocols.socks5h') }
+  { value: 'socks5h', label: t('admin.proxies.protocols.socks5h') },
+  { value: 'ss', label: t('admin.proxies.protocols.ss') }
 ])
 
 const editStatusOptions = computed(() => [
   { value: 'active', label: t('admin.accounts.status.active') },
   { value: 'inactive', label: t('admin.accounts.status.inactive') }
 ])
+
+// ss 节点复用「用户名」槽位存加密方式(cipher)，与常规代理的用户名语义不同，
+// 选中 ss 协议时把标签换成「加密方式」，避免管理员误解字段含义。
+const createUsernameLabel = computed(() =>
+  createForm.protocol === 'ss' ? t('admin.proxies.cipher') : t('admin.proxies.username')
+)
+const editUsernameLabel = computed(() =>
+  editForm.protocol === 'ss' ? t('admin.proxies.cipher') : t('admin.proxies.username')
+)
 
 const proxies = ref<Proxy[]>([])
 const visiblePasswordIds = reactive(new Set<number>())
@@ -1063,6 +1085,7 @@ const showEditModal = ref(false)
 const editPasswordVisible = ref(false)
 const editPasswordDirty = ref(false)
 const showImportData = ref(false)
+const showImportSubscription = ref(false)
 const showDeleteDialog = ref(false)
 const showBatchDeleteDialog = ref(false)
 const showExportDataDialog = ref(false)
@@ -1187,6 +1210,40 @@ const buildProxyQueryFilters = () => ({
   sort_order: sortState.sort_order
 })
 
+// 延迟不落库（探测结果在 Redis，查库后才补进来），后端无法按它排序。
+// 所以选中延迟排序时改走「拉全量 → 前端排序 → 本地分页」，其余排序仍走服务端。
+const CLIENT_SORTED_KEYS = new Set(['latency'])
+
+// 无延迟数据与探测失败的一律排在最后——无论升序降序。
+// "从未探测"不等于"最慢"，把它排到降序首位会误导。
+const sortByLatencyClientSide = (list: Proxy[], order: 'asc' | 'desc'): Proxy[] => {
+  const known: Proxy[] = []
+  const unknown: Proxy[] = []
+  for (const proxy of list) {
+    if (proxy.latency_status === 'failed' || typeof proxy.latency_ms !== 'number') {
+      unknown.push(proxy)
+    } else {
+      known.push(proxy)
+    }
+  }
+  known.sort((a, b) => {
+    const diff = (a.latency_ms as number) - (b.latency_ms as number)
+    if (diff !== 0) return order === 'asc' ? diff : -diff
+    return a.name.localeCompare(b.name)
+  })
+  unknown.sort((a, b) => a.name.localeCompare(b.name))
+  return [...known, ...unknown]
+}
+
+const loadProxiesClientSorted = async () => {
+  const all = await fetchAllProxiesForBatch()
+  const sorted = sortByLatencyClientSide(all, sortState.sort_order)
+  const start = (pagination.page - 1) * pagination.page_size
+  proxies.value = sorted.slice(start, start + pagination.page_size)
+  pagination.total = sorted.length
+  pagination.pages = Math.max(1, Math.ceil(sorted.length / pagination.page_size))
+}
+
 const loadProxies = async () => {
   if (abortController) {
     abortController.abort()
@@ -1195,6 +1252,10 @@ const loadProxies = async () => {
   abortController = currentAbortController
   loading.value = true
   try {
+    if (CLIENT_SORTED_KEYS.has(sortState.sort_by)) {
+      await loadProxiesClientSorted()
+      return
+    }
     const response = await adminAPI.proxies.list(
       pagination.page,
       pagination.page_size,
@@ -1272,6 +1333,10 @@ const closeCreateModal = () => {
 
 const handleDataImported = () => {
   showImportData.value = false
+  loadProxies()
+}
+
+const handleSubscriptionImported = () => {
   loadProxies()
 }
 
@@ -1446,7 +1511,6 @@ const handleUpdateProxy = async () => {
   try {
     const updateData: any = {
       name: editForm.name.trim(),
-      protocol: editForm.protocol,
       host: editForm.host.trim(),
       port: editForm.port,
       username: editForm.username.trim() || null,
@@ -1461,6 +1525,11 @@ const handleUpdateProxy = async () => {
     if (editPasswordDirty.value) {
       updateData.password = editForm.password.trim() || null
     }
+
+    // 后端更新接口的协议白名单已收录 ss，protocol 必须无条件回传：
+    // 若对 ss 做特判跳过，把 http/socks5 代理改成 ss 时该字段不会发送，
+    // 改动静默不生效（UI 却提示更新成功）。
+    updateData.protocol = editForm.protocol
 
     await adminAPI.proxies.update(editingProxy.value.id, updateData)
     appStore.showSuccess(t('admin.proxies.proxyUpdated'))

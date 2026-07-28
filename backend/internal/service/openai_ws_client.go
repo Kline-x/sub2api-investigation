@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -148,11 +149,14 @@ func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client,
 	if d == nil {
 		return nil, errors.New("openai ws dialer is nil")
 	}
-	normalizedProxy := strings.TrimSpace(proxy)
-	if normalizedProxy == "" {
+	if strings.TrimSpace(proxy) == "" {
 		return nil, errors.New("proxy url is empty")
 	}
-	parsedProxyURL, err := url.Parse(normalizedProxy)
+	// 必须走 proxyurl.Parse + proxyutil.ConfigureTransportProxy：
+	// 前者是本仓库对代理 URL 的唯一合法入口（禁止直接 url.Parse），
+	// 后者按协议决定是设置 Transport.Proxy（http/https）还是 DialContext
+	// （socks5/socks5h/ss）。ss 走 Proxy 会向节点端口发明文 CONNECT，必然失败。
+	normalizedProxy, parsedProxyURL, err := proxyurl.Parse(proxy)
 	if err != nil {
 		return nil, fmt.Errorf("invalid proxy url: %w", err)
 	}
@@ -167,12 +171,15 @@ func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client,
 	}
 	d.cleanupProxyClientsLocked(now)
 	transport := &http.Transport{
-		Proxy:               http.ProxyURL(parsedProxyURL),
 		MaxIdleConns:        openAIWSProxyTransportMaxIdleConns,
 		MaxIdleConnsPerHost: openAIWSProxyTransportMaxIdleConnsPerHost,
 		IdleConnTimeout:     openAIWSProxyTransportIdleConnTimeout,
 		TLSHandshakeTimeout: 10 * time.Second,
 		ForceAttemptHTTP2:   true,
+	}
+	// fail-fast：代理配置失败直接返回 error，不得退化为直连（会暴露真实 IP）
+	if err := proxyutil.ConfigureTransportProxy(transport, parsedProxyURL); err != nil {
+		return nil, fmt.Errorf("configure proxy transport: %w", err)
 	}
 	client := &http.Client{Transport: transport}
 	d.proxyClients[normalizedProxy] = &openAIWSProxyClientEntry{

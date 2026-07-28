@@ -66,6 +66,20 @@ git tag -d <tag>                   # 删本地标签
 3. 全量测试通过后按本规范发 `v<新版本>-custom.1`
 4. 旧基线如需保留回滚能力，从合并前提交拉 `custom/vX.Y.Z-maint` 维护分支并 cherry-pick 链路必需改动（参照 `custom/v0.1.155-maint`）
 
+## 定制迁移的 `9001_` 前缀与 atlas 基线（已知耦合，勿踩）
+
+定制迁移文件用 `9001_` 起头（当前只有 `backend/migrations/9001_custom_proxy_extra.sql`），
+目的是把定制迁移排到所有上游迁移之后，避免和上游新增的 `186_`、`187_` … 撞号。
+
+**副作用**：`repository/migrations_runner.go` 的 `latestMigrationBaseline()` 取 `sort.Strings(files)`
+后的**最后一个**文件名作为写入 `atlas_schema_revisions` 的基线版本。加入 `9001_` 后，词法最后一个
+从 `185_account_patrol_records.sql` 变成了 `9001_custom_proxy_extra.sql`——基线号从此恒大于任何上游版本号。
+
+- **今天无害**：本仓库没有任何代码回读 `atlas_schema_revisions`，该表只是写给未来的 atlas 用的。
+- **未来接入 atlas 前必须先处理**：一个恒大于所有上游版本号的基线会让上游后续迁移被 atlas 误判为「已应用」而跳过。
+- **不要试图靠改迁移文件内容来修**：runner 对已应用迁移做 SHA256 校验，改内容会让已部署实例启动即失败。
+  真要调整，只能新增迁移 + 同步修正 `latestMigrationBaseline()` 的选取规则（如按数字段排序并排除 `9000+` 定制号段）。
+
 ## 本地验证环境
 
 用与线上一致的 GHCR 镜像 + docker compose（postgres + redis）起本地栈实测，参考 `deploy/docker-compose.yml`。要点：容器带 `restart: unless-stopped`；`JWT_SECRET` ≥32 字节；接有数据的旧库前先 `pg_dump` 备份（新版启动会跑不可逆的 schema 迁移）。

@@ -64,6 +64,9 @@ func (Proxy) Fields() []ent.Field {
 		field.Int("expiry_warn_days").
 			Default(7).
 			Comment("Days before expiry to flag as expiring-soon (per proxy)."),
+		field.JSON("extra", map[string]string{}).
+			Optional().
+			Comment("Protocol-specific extra parameters (e.g. shadowsocks plugin opts)."),
 	}
 }
 

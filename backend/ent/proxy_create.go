@@ -187,6 +187,12 @@ func (_c *ProxyCreate) SetNillableExpiryWarnDays(v *int) *ProxyCreate {
 	return _c
 }
 
+// SetExtra sets the "extra" field.
+func (_c *ProxyCreate) SetExtra(v map[string]string) *ProxyCreate {
+	_c.mutation.SetExtra(v)
+	return _c
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_c *ProxyCreate) AddAccountIDs(ids ...int64) *ProxyCreate {
 	_c.mutation.AddAccountIDs(ids...)
@@ -415,6 +421,10 @@ func (_c *ProxyCreate) createSpec() (*Proxy, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ExpiryWarnDays(); ok {
 		_spec.SetField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
 		_node.ExpiryWarnDays = value
+	}
+	if value, ok := _c.mutation.Extra(); ok {
+		_spec.SetField(proxy.FieldExtra, field.TypeJSON, value)
+		_node.Extra = value
 	}
 	if nodes := _c.mutation.AccountsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -699,6 +709,24 @@ func (u *ProxyUpsert) AddExpiryWarnDays(v int) *ProxyUpsert {
 	return u
 }
 
+// SetExtra sets the "extra" field.
+func (u *ProxyUpsert) SetExtra(v map[string]string) *ProxyUpsert {
+	u.Set(proxy.FieldExtra, v)
+	return u
+}
+
+// UpdateExtra sets the "extra" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdateExtra() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldExtra)
+	return u
+}
+
+// ClearExtra clears the value of the "extra" field.
+func (u *ProxyUpsert) ClearExtra() *ProxyUpsert {
+	u.SetNull(proxy.FieldExtra)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -972,6 +1000,27 @@ func (u *ProxyUpsertOne) AddExpiryWarnDays(v int) *ProxyUpsertOne {
 func (u *ProxyUpsertOne) UpdateExpiryWarnDays() *ProxyUpsertOne {
 	return u.Update(func(s *ProxyUpsert) {
 		s.UpdateExpiryWarnDays()
+	})
+}
+
+// SetExtra sets the "extra" field.
+func (u *ProxyUpsertOne) SetExtra(v map[string]string) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetExtra(v)
+	})
+}
+
+// UpdateExtra sets the "extra" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdateExtra() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateExtra()
+	})
+}
+
+// ClearExtra clears the value of the "extra" field.
+func (u *ProxyUpsertOne) ClearExtra() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearExtra()
 	})
 }
 
@@ -1414,6 +1463,27 @@ func (u *ProxyUpsertBulk) AddExpiryWarnDays(v int) *ProxyUpsertBulk {
 func (u *ProxyUpsertBulk) UpdateExpiryWarnDays() *ProxyUpsertBulk {
 	return u.Update(func(s *ProxyUpsert) {
 		s.UpdateExpiryWarnDays()
+	})
+}
+
+// SetExtra sets the "extra" field.
+func (u *ProxyUpsertBulk) SetExtra(v map[string]string) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetExtra(v)
+	})
+}
+
+// UpdateExtra sets the "extra" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdateExtra() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateExtra()
+	})
+}
+
+// ClearExtra clears the value of the "extra" field.
+func (u *ProxyUpsertBulk) ClearExtra() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.ClearExtra()
 	})
 }
 

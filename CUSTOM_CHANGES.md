@@ -2,6 +2,21 @@
 
 本仓库相对上游 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 的全部定制改动，按版本记录。**每次发布新版本时在此追加对应条目。**
 
+## shadowsocks 出站代理（2026-07-27，`develop/xuyang/ss-obfs-proxy`，待发布）
+
+让 sub2api **单一二进制内**原生支持通过机场订阅节点出站，解决「服务器访问不了上游 AI API」。不新增容器/进程，面板一键更新后即可用；不改宿主机路由，宿主机默认出口 IP 不受影响。
+
+- **feat**：内嵌 `ss + simple-obfs(tls)` 拨号（`pkg/shadowsocks/`）。加密层用 `go-shadowsocks2`（Apache-2.0），obfs 伪装层自实现（未引用 GPL 实现源码——mihomo 的 `transport/simple-obfs` 子包被 pkg.go.dev 标为 GPL-3.0，设计阶段已否决）
+- **feat**：Clash 订阅解析（`pkg/clashsub/`）+ 订阅导入接口 `POST /admin/proxies/import-subscription`（支持 `dry_run` 预览；不受支持的节点回传中文跳过原因，不静默丢弃）
+- **feat**：`proxies` 表新增 `extra` JSONB 列（定制迁移 `9001_`，避开上游编号段），存插件参数；`Proxy.URL()` 拼成 query（按 key 排序保证字符串稳定，否则击穿 httpclient 的 transport 缓存）
+- **feat**：ss 接入两条代理路径——`proxyutil.ConfigureTransportProxy` 与 TLS 指纹路径（`repository/http_upstream.go`）。后者此前 ss 会落入「未知协议回退」，隧道通但**不带指纹**
+- **feat**：前端协议下拉加 ss，选中时「用户名」标签变「加密方式」（ss 的 cipher 占 userinfo 的 username 位）；代理列表页新增「从订阅导入」（先 dry_run 预览再确认）
+- **验证**：真实机场节点端到端打通，走完整生产链路 `Proxy.URL() → proxyurl.Parse → proxyutil → HTTPS` 请求 api.anthropic.com 返回 HTTP 401（带 request_id）
+
+设计文档 `docs/superpowers/specs/2026-07-27-ss-obfs-proxy-design.md`，实施计划 `docs/superpowers/plans/2026-07-27-ss-obfs-proxy.md`（均被 gitignore，需 `git add -f`）。
+
+**已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
+
 ## v0.1.163 合并（2026-07-23，custom/v0.1.163）
 
 合并上游 `v0.1.163` 到分支 `custom/v0.1.163`（自 `main` 切出）。冲突处理要点：
@@ -174,7 +189,27 @@
 | **Grok 连接测试允许非调度态取 token**（error/暂停/temp 可测；网关路径仍要求可调度） | `service/grok_token_provider.go`（`GetAccessTokenForManualTest`，v0.1.162 起采用上游接口；`withAccountConnectionTestPath` 仍保留给其它路径）、`oauth_refresh_api.go`、`account_test_service.go` |
 | grok 刷新失败置错（4xx 非429→SetError） | `service/grok_refresh_failure.go`、`pkg/xai/errors.go`、`repository/grok_oauth_client.go`、`handler/admin/account_handler.go`、`grok_oauth_handler.go` |
 | CPA(xai-*.json)导入 | `handler/admin/account_data_xai.go`、`account_data.go`（`XaiAccounts`）、前端 `ImportDataModal.vue` / `utils/xaiImport.ts` |
+| **shadowsocks 出站代理**（ss + simple-obfs/tls 内嵌拨号；Clash 订阅导入）<br>**⚠ 见下方「ss 出站代理：合并上游必查清单」** | `pkg/shadowsocks/`（config/dialer/obfs_tls）、`pkg/clashsub/`、`pkg/proxyurl/parse.go`（`allowedSchemes` 含 `ss`）、`pkg/proxyutil/dialer.go`（`case "ss"`）、`repository/http_upstream.go`（TLS 指纹分派 `case "ss"`）、`repository/req_client_pool.go`（`applyReqClientProxy`）、`service/openai_ws_client.go`（`proxyHTTPClient`）、`migrations/9001_custom_proxy_extra.sql`、`ent/schema/proxy.go`（`extra`）、`service/proxy.go`（`Extra` + `URL()` 拼 query）、`handler/admin/proxy_subscription.go`、`handler/admin/proxy_handler.go`（`oneof` 白名单含 ss）、前端 `ProxiesView.vue` / `types/index.ts` / `api/admin/proxies.ts` |
 | 导入后刷新+测试流水（取代 probe；**合并上游须保留 importData 替换点**） | `handler/admin/grok_import_pipeline.go`、`account_data.go` |
+
+### ss 出站代理：合并上游必查清单
+
+上表只列了「改动在哪」。下面这些点**丢失后不会立刻报错**（编译过、测试过、面板点得动），
+但节点会静默失效或参数被悄悄清空，所以合并上游解冲突后必须逐条回读确认。
+
+| 必查点 | 丢失后的后果 |
+|---|---|
+| **`repository/http_upstream.go`：`normalizeProxyURL` 不得清空 `RawQuery`** | **实战踩过的坑，症状最隐蔽。** 该函数为算连接池缓存键做 URL 归一化，原本有一行 `parsed.RawQuery = ""`，而它返回的**同一个** `parsed` 又被用来建 transport。ss 节点的 obfs 插件参数（`plugin`/`mode`/`obfs-host`）正挂在 query 上，被清掉后建出的是**裸 ss 连接**——要求 obfs 的服务端静默丢弃，表现为 `Post ...: EOF`。代理延迟测试、订阅导入、单元测试全部正常，只有真实转发失败，极难定位。保留 query 同时保证了连接池隔离（obfs 参数不同的节点不会共用同一个池）。回归测试见 `http_upstream_proxy_query_test.go` |
+| `repository/proxy_repo.go`：`SetExtra` / `ClearExtra` / `proxyEntityToService` 中的 `Extra` | obfs 参数不入库或不出库。代理看起来正常，但拨号时没有 obfs 层 → 节点被墙，症状是「连不上，日志只有超时」 |
+| **`service/admin_proxy.go`：`UpdateProxy` 里的 `if input.Extra != nil` 守卫** | **全改动里最脆的一行。** 它防的是「不带 Extra 的普通编辑请求（如面板的 `UpdateProxyRequest`）把 obfs 参数清空」。若合并时被改成无条件 `proxy.Extra = input.Extra`，管理员在面板编辑一次 ss 代理（哪怕只改个备注）→ obfs 参数被清空 → 节点静默失效。回归测试见 `service/admin_proxy_extra_test.go`，该文件必须一起保留 |
+| `service/admin_service.go`：`CreateProxyInput.Extra` / `UpdateProxyInput.Extra` | 上面两条的传输载体；字段没了则 handler 传不进 service，obfs 参数永远进不到库里 |
+| `handler/dto/types.go` + `mappers.go`：`Proxy.Extra` 及 `ProxyFromService` 中的映射 | `/admin/proxies` 系列接口不再返回 `extra`，前端无法展示/回填 obfs 参数（前端 `types/index.ts` 里 `extra` 字段会永远是 `undefined`） |
+| `handler/admin/account_data.go` + `proxy_data.go`：`DataProxy.Extra` 与 `validateDataProxy` 的 ss 白名单 | 导入导出丢 extra；导出再导入一轮，ss 代理退化成裸 ss（无 obfs） |
+| `routes/admin.go`：`import-subscription` 路由注册 | 订阅导入接口 404，前端「导入订阅」按钮直接失效 |
+| `repository/req_client_pool.go`：`applyReqClientProxy` 的 `ss` 分支（`SetProxy(nil)` + `SetDial`） | req/v3 只认 socks5/socks5h，其余 scheme 一律发明文 CONNECT。丢了这段 → 网关请求能通但 **OAuth token 刷新失败**，叠加本仓库「grok 刷新失败 4xx 非 429 → SetError」的定制逻辑，账号会被自动置为 error |
+| `service/openai_ws_client.go`：`proxyHTTPClient` 走 `proxyurl.Parse` + `proxyutil.ConfigureTransportProxy` | 上游原版直接 `url.Parse` + `http.ProxyURL`，既违反 proxyurl 包「禁止直接 url.Parse」的硬约定，ss 下也会退化为 CONNECT 失败 |
+| `go.mod`：`github.com/shadowsocks/go-shadowsocks2` 依赖 | 合并上游若重写 go.mod/go.sum，依赖被剔除后 `pkg/shadowsocks` 直接编译不过（这条至少是显性失败） |
+| **合并上游若动了 ent schema：必须重跑 ent 代码生成** | `ent/schema/proxy.go` 的 `extra` 字段需要 `go generate ./ent`（或项目既定的 ent 生成命令）重新生成 `ent/proxy.go` / `mutation.go` / `migrate/schema.go` 等。只改 schema 不重跑生成，`Extra` 在生成代码里不存在，编译失败或字段被静默丢弃 |
 
 ## 已知问题
 

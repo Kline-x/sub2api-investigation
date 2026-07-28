@@ -54,6 +54,9 @@ func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) er
 	if proxyIn.BackupProxyID != nil {
 		builder.SetBackupProxyID(*proxyIn.BackupProxyID)
 	}
+	if len(proxyIn.Extra) > 0 {
+		builder.SetExtra(proxyIn.Extra)
+	}
 
 	created, err := builder.Save(ctx)
 	if err == nil {
@@ -175,6 +178,11 @@ func updateProxyAndInvalidateProbeSnapshots(ctx context.Context, client *dbent.C
 		builder.SetBackupProxyID(*proxyIn.BackupProxyID)
 	} else {
 		builder.ClearBackupProxyID()
+	}
+	if len(proxyIn.Extra) > 0 {
+		builder.SetExtra(proxyIn.Extra)
+	} else {
+		builder.ClearExtra()
 	}
 
 	updated, err := builder.Save(ctx)
@@ -589,6 +597,7 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 		FallbackMode:   m.FallbackMode,
 		BackupProxyID:  m.BackupProxyID,
 		ExpiryWarnDays: m.ExpiryWarnDays,
+		Extra:          m.Extra,
 	}
 	if m.Username != nil {
 		out.Username = *m.Username

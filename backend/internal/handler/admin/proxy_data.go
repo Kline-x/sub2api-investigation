@@ -79,6 +79,7 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 			FallbackMode:    p.FallbackMode,
 			BackupProxyName: backupProxyName,
 			ExpiryWarnDays:  p.ExpiryWarnDays,
+			Extra:           p.Extra,
 		})
 	}
 
@@ -232,6 +233,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			FallbackMode:   fallbackMode,
 			BackupProxyID:  backupProxyID,
 			ExpiryWarnDays: item.ExpiryWarnDays,
+			Extra:          item.Extra,
 		})
 		if err != nil {
 			result.ProxyFailed++

@@ -175,6 +175,38 @@ func TestConfigureTransportProxy_IPv6(t *testing.T) {
 	}
 }
 
+func TestConfigureTransportProxy_ss设置DialContext(t *testing.T) {
+	u, err := url.Parse("ss://chacha20-ietf-poly1305:pwd@node.example.com:443")
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	tr := &http.Transport{}
+	if err := ConfigureTransportProxy(tr, u); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr.DialContext == nil {
+		t.Fatal("DialContext 未被设置")
+	}
+	if tr.Proxy != nil {
+		t.Error("ss 不应设置 Transport.Proxy")
+	}
+}
+
+func TestConfigureTransportProxy_ss参数非法时报错(t *testing.T) {
+	u, err := url.Parse("ss://badcipher:pwd@node.example.com:443")
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	tr := &http.Transport{}
+	err = ConfigureTransportProxy(tr, u)
+	if err == nil {
+		t.Fatal("期望报错，实际成功")
+	}
+	if tr.DialContext != nil {
+		t.Error("失败时不得设置 DialContext（禁止退化为直连）")
+	}
+}
+
 func TestConfigureTransportProxy_SpecialCharsInPassword(t *testing.T) {
 	testCases := []struct {
 		name     string
