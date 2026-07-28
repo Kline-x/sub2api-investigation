@@ -1,0 +1,31 @@
+# =============================================================================
+# 叠加在 docker-compose.standalone.yml 上，把应用接入一个「已存在」的 docker 网络
+# =============================================================================
+# standalone.yml 本身假定外部 PostgreSQL/Redis 可以直接寻址（宿主机端口、内网 IP、
+# host.docker.internal 等）。但更常见的情况是：db/redis 本来就跑在另一套 compose 栈里，
+# 只在那套栈自己的网络内暴露端口。这时候光有 standalone.yml 起来的容器不在同一网络，
+# DATABASE_HOST 写对方的服务名会解析失败。
+#
+# 用法（EXTERNAL_NETWORK 填已有网络名，用 `docker network ls` 查）：
+#
+#   EXTERNAL_NETWORK=s2a-test_default \
+#   docker compose -f docker-compose.standalone.yml \
+#                  -f docker-compose.external-network.yml \
+#                  -p <项目名> up -d
+#
+# 接入后 .env 里的 DATABASE_HOST / REDIS_HOST 直接写对方 compose 里的**服务名**
+# （不是容器名，两者都能解析，但服务名更稳定）。
+#
+# ⚠️ 复用已有数据库时，JWT_SECRET 和 TOTP_ENCRYPTION_KEY 必须与原实例保持一致：
+#    前者变了所有人登录态失效，后者变了已配置的 2FA 全部失效。
+# =============================================================================
+
+services:
+  sub2api:
+    networks:
+      - external
+
+networks:
+  external:
+    external: true
+    name: ${EXTERNAL_NETWORK:?需要指定已存在的网络名，例如 EXTERNAL_NETWORK=s2a-test_default}
