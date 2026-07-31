@@ -201,12 +201,22 @@ func responsesItemWire(item *ResponsesOutput) map[string]any {
 		m["call_id"] = item.CallID
 		m["execution"] = "client"
 		m["arguments"] = toolSearchCallArgumentsJSON(item.Arguments)
+	case "web_search_call":
+		// action 是该类型独有的字段，统一走本函数后必须在这里带上，否则会丢。
+		if item.Action != nil {
+			m["action"] = item.Action
+		}
 	}
 	return m
 }
 
 // messageContentWire renders a message item's content array; always an array
 // (never null), with each output_text part carrying its text.
+//
+// output_text 部分必须与 outputTextPartWire 保持同一形态——annotations/logprobs
+// 也是必填的。此前这里只输出 type/text，于是同一个 output_text 在
+// response.content_part.* 事件里带 annotations、在 message item 的 content 数组里
+// 却没有，严格客户端解析后者时报 `missing field annotations`。
 func messageContentWire(parts []ResponsesContentPart) []map[string]any {
 	out := make([]map[string]any, 0, len(parts))
 	for _, p := range parts {
@@ -214,7 +224,12 @@ func messageContentWire(parts []ResponsesContentPart) []map[string]any {
 		if typ == "" {
 			typ = "output_text"
 		}
-		out = append(out, map[string]any{"type": typ, "text": p.Text})
+		part := map[string]any{"type": typ, "text": p.Text}
+		if typ == "output_text" {
+			part["annotations"] = []any{}
+			part["logprobs"] = []any{}
+		}
+		out = append(out, part)
 	}
 	return out
 }

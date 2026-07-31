@@ -2729,8 +2729,39 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle Antigravity accounts: return Claude + Gemini models
 	if account.Platform == service.PlatformAntigravity {
-		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
-		response.Success(c, antigravity.DefaultModels())
+		defaultModels := antigravity.DefaultModels()
+
+		// 定制：账号配了「模型限制」(model_mapping，通常由「同步上游支持的模型」
+		// 拉取上游真实列表填充) 时，测试连接的模型下拉必须用这份列表，而不是硬编码的
+		// DefaultModels()——否则「测试账号连接」里能选到账号根本不支持的模型，
+		// 且与「编辑账号 → 模型限制」显示的内容对不上。
+		// 其它平台(OpenAI/Gemini/Grok)本来就是这个模式，此处补齐一致性。
+		mapping := account.GetModelMapping()
+		if len(mapping) == 0 {
+			response.Success(c, defaultModels)
+			return
+		}
+
+		defaultByID := make(map[string]antigravity.ClaudeModel, len(defaultModels))
+		for _, m := range defaultModels {
+			defaultByID[m.ID] = m
+		}
+
+		models := make([]antigravity.ClaudeModel, 0, len(mapping))
+		for requestedModel := range mapping {
+			if dm, ok := defaultByID[requestedModel]; ok {
+				models = append(models, dm)
+				continue
+			}
+			// 上游新模型可能还没进 DefaultModels()，按请求名回落，保证可选。
+			models = append(models, antigravity.ClaudeModel{
+				ID:          requestedModel,
+				Type:        "model",
+				DisplayName: requestedModel,
+			})
+		}
+		sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
+		response.Success(c, models)
 		return
 	}
 

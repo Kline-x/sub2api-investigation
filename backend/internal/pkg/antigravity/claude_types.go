@@ -122,6 +122,27 @@ type ClaudeContentItem struct {
 	Input any    `json:"input,omitempty"`
 }
 
+// MarshalJSON 保证 thinking 项恒带 thinking 与 signature。
+//
+// 两个字段都带 omitempty，空值会被丢掉，而 Anthropic 线上格式里它们对 thinking 块
+// 都是必填的——严格客户端(grok-shell 等 Rust/serde 实现)缺字段直接报
+// `missing field signature`，整条响应作废。其余类型保持原有序列化不变。
+func (c ClaudeContentItem) MarshalJSON() ([]byte, error) {
+	type claudeContentItemAlias ClaudeContentItem
+	if c.Type != "thinking" {
+		return json.Marshal(claudeContentItemAlias(c))
+	}
+	return json.Marshal(struct {
+		Thinking  string `json:"thinking"`
+		Signature string `json:"signature"`
+		claudeContentItemAlias
+	}{
+		Thinking:               c.Thinking,
+		Signature:              c.Signature,
+		claudeContentItemAlias: claudeContentItemAlias(c),
+	})
+}
+
 // ClaudeUsage Claude 用量统计
 type ClaudeUsage struct {
 	InputTokens              int `json:"input_tokens"`

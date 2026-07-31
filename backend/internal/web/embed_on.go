@@ -364,6 +364,15 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		trimmed == "/models" ||
 		trimmed == "/responses" ||
 		strings.HasPrefix(trimmed, "/responses/") ||
+		// 定制补充：以下不带 /v1 前缀的网关别名在 routes/gateway.go 里都注册了路由，
+		// 但此前不在本放行清单内。本中间件是 r.Use() 全局注册、且位置在所有路由**之前**，
+		// 漏放行的路径会被它直接返回 200 + index.html —— 既不是 404 也没有任何错误提示，
+		// 客户端(如 Grok-Desktop 的 anthropic messages 后端)拿到 HTML 只能一直重试转圈。
+		// 这份清单与根路径路由注册必须同步维护，见 CUSTOM_CHANGES.md。
+		trimmed == "/messages" ||
+		strings.HasPrefix(trimmed, "/messages/") ||
+		trimmed == "/chat/completions" ||
+		trimmed == "/embeddings" ||
 		trimmed == "/alpha/search" ||
 		strings.HasPrefix(trimmed, "/images/") ||
 		strings.HasPrefix(trimmed, "/videos/")

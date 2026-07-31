@@ -289,9 +289,13 @@ func (p *StreamingProcessor) processThinking(text, signature string) []byte {
 
 	// 开始或继续 thinking 块
 	if p.blockType != BlockTypeThinking {
+		// signature 必须出现（哪怕为空）：Anthropic 线上格式是
+		// {"type":"thinking","thinking":"","signature":""}，严格客户端
+		// (grok-shell 等 Rust/serde 实现) 缺字段直接报 `missing field signature`。
 		_, _ = result.Write(p.startBlock(BlockTypeThinking, map[string]any{
-			"type":     "thinking",
-			"thinking": "",
+			"type":      "thinking",
+			"thinking":  "",
+			"signature": "",
 		}))
 	}
 
@@ -466,8 +470,9 @@ func (p *StreamingProcessor) emitEmptyThinkingWithSignature(signature string) []
 	var result bytes.Buffer
 
 	_, _ = result.Write(p.startBlock(BlockTypeThinking, map[string]any{
-		"type":     "thinking",
-		"thinking": "",
+		"type":      "thinking",
+		"thinking":  "",
+		"signature": "",
 	}))
 	_, _ = result.Write(p.emitDelta("thinking_delta", map[string]any{
 		"thinking": "",

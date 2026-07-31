@@ -844,7 +844,11 @@ func TestStreamingReasoning(t *testing.T) {
 
 	sse, err := ResponsesAnthropicEventToSSE(events[0])
 	require.NoError(t, err)
-	assert.Contains(t, sse, `"content_block":{"thinking":"","type":"thinking"}`)
+	// 定制：thinking 块恒带 signature（官方线上格式即
+	// {"type":"thinking","thinking":"","signature":""}）。上游此前省略空 signature，
+	// 严格客户端(grok-shell)会报 `missing field signature`。合并上游时若该断言被改回
+	// 不带 signature 的版本，说明定制被覆盖，见 CUSTOM_CHANGES.md。
+	assert.Contains(t, sse, `"content_block":{"thinking":"","signature":"","type":"thinking"}`)
 
 	// reasoning text delta
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{

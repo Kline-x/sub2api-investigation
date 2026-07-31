@@ -22,9 +22,10 @@ func AnthropicToResponsesResponse(resp *AnthropicResponse) *ResponsesResponse {
 	}
 
 	out := &ResponsesResponse{
-		ID:     id,
-		Object: "response",
-		Model:  resp.Model,
+		ID:        id,
+		Object:    "response",
+		CreatedAt: time.Now().Unix(),
+		Model:     resp.Model,
 	}
 
 	var outputs []ResponsesOutput
@@ -265,6 +266,11 @@ func anthToResHandleMessageStart(evt *AnthropicStreamEvent, state *AnthropicEven
 	state.CreatedSent = true
 
 	// Emit response.created
+	//
+	// 注意：**不要在这里补发 response.in_progress**。官方序列确实是
+	// created → in_progress → output_item.added，但 2026-07-31 实测补发后
+	// grok-shell(Grok-Desktop) 从「只丢开头」恶化为「完全不渲染」，
+	// 上游请求本身是成功的(usage_logs 有正常的 output_tokens)。
 	return []ResponsesStreamEvent{makeResponsesCreatedEvent(state)}
 }
 
@@ -551,11 +557,12 @@ func makeResponsesCreatedEvent(state *AnthropicEventToResponsesState) ResponsesS
 		Type:           "response.created",
 		SequenceNumber: seq,
 		Response: &ResponsesResponse{
-			ID:     state.ResponseID,
-			Object: "response",
-			Model:  state.Model,
-			Status: "in_progress",
-			Output: []ResponsesOutput{},
+			ID:        state.ResponseID,
+			Object:    "response",
+			CreatedAt: state.Created,
+			Model:     state.Model,
+			Status:    "in_progress",
+			Output:    []ResponsesOutput{},
 		},
 	}
 }
@@ -602,6 +609,7 @@ func makeResponsesCompletedEvent(
 		Response: &ResponsesResponse{
 			ID:                state.ResponseID,
 			Object:            "response",
+			CreatedAt:         state.Created,
 			Model:             state.Model,
 			Status:            status,
 			Output:            outputs,

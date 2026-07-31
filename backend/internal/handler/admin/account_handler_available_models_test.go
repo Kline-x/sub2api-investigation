@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -340,4 +342,98 @@ func TestAccountHandlerSyncUpstreamModels_UpstreamErrorDoesNotExposeBody(t *test
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 	require.Contains(t, rec.Body.String(), "Upstream model list request failed with HTTP 502")
 	require.NotContains(t, rec.Body.String(), "SECRET_TOKEN")
+}
+
+// Antigravity 账号配了「模型限制」(model_mapping) 时，测试连接的模型下拉必须用这份
+// 列表——它通常由「同步上游支持的模型」拉取上游真实列表填充。此前该分支无条件返回
+// 硬编码的 antigravity.DefaultModels()，导致「测试账号连接」的下拉与「编辑账号 →
+// 模型限制」显示的内容对不上，还能选到账号实际不支持的模型。
+func TestAccountHandlerGetAvailableModels_AntigravityUsesModelMapping(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       77,
+			Name:     "antigravity-mapped",
+			Platform: service.PlatformAntigravity,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"claude-sonnet-4-6": "claude-sonnet-4-6",
+					"gemini-3.1-pro":    "gemini-3.1-pro",
+					// 上游新模型尚未进 DefaultModels()，也必须可选
+					"chat_20706": "chat_20706",
+				},
+			},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/77/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	ids := make([]string, 0, len(resp.Data))
+	for _, m := range resp.Data {
+		ids = append(ids, m.ID)
+	}
+
+	// mapping 里配置的模型必须都在（含尚未进 DefaultModels 的上游新模型）
+	require.Subset(t, ids, []string{"chat_20706", "claude-sonnet-4-6", "gemini-3.1-pro"},
+		"model_mapping 里配置的模型必须出现在下拉中")
+
+	// DefaultModels() 独有、且不在 mapping 里的模型不应出现——这正是修复前的 bug：
+	// 该分支曾无条件返回 antigravity.DefaultModels() 全集。
+	for _, unexpected := range []string{"gemini-2.5-flash-image", "gemini-2.5-flash-lite", "claude-opus-4-6-thinking"} {
+		require.NotContainsf(t, ids, unexpected,
+			"未在 model_mapping 中的 %s 不应出现（说明仍在返回 DefaultModels 全集）", unexpected)
+	}
+
+	// 数量应远小于 DefaultModels 全集
+	require.Less(t, len(ids), len(antigravity.DefaultModels()),
+		"配了模型限制后返回数量应小于默认全集")
+
+	// 排序稳定，保证下拉顺序不抖
+	sorted := append([]string(nil), ids...)
+	sort.Strings(sorted)
+	require.Equal(t, sorted, ids, "应按 ID 排序")
+}
+
+// 未配置模型限制时回落到默认全集，保持原有行为。
+func TestAccountHandlerGetAvailableModels_AntigravityDefaultsWithoutMapping(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       78,
+			Name:     "antigravity-defaults",
+			Platform: service.PlatformAntigravity,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/78/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Data, "无 mapping 时应回落到 antigravity.DefaultModels()")
+	require.Greater(t, len(resp.Data), 3)
 }
