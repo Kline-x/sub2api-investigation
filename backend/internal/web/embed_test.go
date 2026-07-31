@@ -909,3 +909,39 @@ func BenchmarkFrontendServerServeIndexHTML(b *testing.B) {
 		server.serveIndexHTML(c)
 	}
 }
+
+// 前端中间件是 r.Use() 全局注册且位于所有路由**之前**，因此 routes/gateway.go 里
+// 每一个不带 /v1 前缀的网关别名都必须出现在 shouldBypassEmbeddedFrontend 的放行清单里。
+// 漏一个 → 该路径被前端中间件吞掉，返回 200 + index.html：既不是 404、也没有任何错误
+// 提示，客户端只能一直重试转圈，极难定位（2026-07-31 实战踩坑，/messages 就是这么丢的）。
+func TestEmbeddedFrontendBypassesBareGatewayAliasRoutes(t *testing.T) {
+	for _, path := range []string{
+		"/messages",
+		"/messages/count_tokens",
+		"/responses",
+		"/responses/compact",
+		"/chat/completions",
+		"/embeddings",
+		"/models",
+		"/alpha/search",
+		"/images/generations",
+		"/images/edits",
+		"/videos/generations",
+	} {
+		require.Truef(t, shouldBypassEmbeddedFrontend(path),
+			"根路径网关别名 %s 未放行,会被前端中间件返回 200+HTML 而非进入网关", path)
+	}
+}
+
+// 反向守卫:真正属于前端的 SPA 路由不能被误放行。
+func TestEmbeddedFrontendKeepsServingSPARoutes(t *testing.T) {
+	for _, path := range []string{
+		"/",
+		"/login",
+		"/admin/accounts",
+		"/dashboard",
+	} {
+		require.Falsef(t, shouldBypassEmbeddedFrontend(path),
+			"SPA 路由 %s 被误放行,前端页面会 404", path)
+	}
+}

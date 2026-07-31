@@ -94,10 +94,16 @@ func (b AnthropicContentBlock) MarshalJSON() ([]byte, error) {
 			anthropicContentBlock
 		}{Text: b.Text, anthropicContentBlock: anthropicContentBlock(b)})
 	case "thinking":
+		// thinking 块必须同时带 thinking 和 signature：两者在 Anthropic 线上格式里
+		// 都是必填的，而结构体上它们都带 omitempty——空值会被丢掉，严格客户端
+		// (grok-shell 等 Rust/serde 实现) 直接报 `missing field signature`。
+		// 官方的 content_block_start 形如
+		// {"type":"thinking","thinking":"","signature":""}。
 		return json.Marshal(struct {
-			Thinking string `json:"thinking"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
 			anthropicContentBlock
-		}{Thinking: b.Thinking, anthropicContentBlock: anthropicContentBlock(b)})
+		}{Thinking: b.Thinking, Signature: b.Signature, anthropicContentBlock: anthropicContentBlock(b)})
 	default:
 		return json.Marshal(base)
 	}
@@ -331,12 +337,16 @@ func (t *ResponsesTool) UnmarshalJSON(data []byte) error {
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
 type ResponsesResponse struct {
-	ID     string            `json:"id"`
-	Object string            `json:"object"` // "response"
-	Model  string            `json:"model"`
-	Status string            `json:"status"` // "completed" | "incomplete" | "failed"
-	Output []ResponsesOutput `json:"output"`
-	Usage  *ResponsesUsage   `json:"usage,omitempty"`
+	ID     string `json:"id"`
+	Object string `json:"object"` // "response"
+	// CreatedAt 是 Responses API 规范里的必填字段。Rust 客户端(Codex CLI 等)用
+	// serde 反序列化时字段缺失会直接报 `missing field created_at` 让请求失败,
+	// 所以**不能加 omitempty**——零值也必须出现在 JSON 里。
+	CreatedAt int64             `json:"created_at"`
+	Model     string            `json:"model"`
+	Status    string            `json:"status"` // "completed" | "incomplete" | "failed"
+	Output    []ResponsesOutput `json:"output"`
+	Usage     *ResponsesUsage   `json:"usage,omitempty"`
 
 	// incomplete_details is present when status="incomplete"
 	IncompleteDetails *ResponsesIncompleteDetails `json:"incomplete_details,omitempty"`
@@ -389,21 +399,19 @@ type ResponsesOutput struct {
 // arguments 是 JSON 对象而非 function_call 语义下的字符串。其余类型走默认结构体
 // 序列化，输出逐字节不变。
 func (o ResponsesOutput) MarshalJSON() ([]byte, error) {
-	type responsesOutputAlias ResponsesOutput
-	if o.Type != "tool_search_call" {
+	switch o.Type {
+	case "message", "reasoning", "function_call", "custom_tool_call", "tool_search_call", "web_search_call":
+		// 统一走 responsesItemWire——它是 Responses 字段存在性的唯一真源。
+		// 此前只有 response.output_item.added/done 事件走它，而 response.completed
+		// 携带的 output 数组走默认序列化，同一个 item 在两处形态不一致：message 的
+		// content:[]、function_call 的 arguments:""、reasoning 的 summary:[] 都会被
+		// omitempty 吃掉，严格客户端(Codex)解析终止事件时报 missing field。
+		return json.Marshal(responsesItemWire(&o))
+	default:
+		// 未收录的类型保持默认序列化，避免 wire 的 switch 漏掉其独有字段。
+		type responsesOutputAlias ResponsesOutput
 		return json.Marshal(responsesOutputAlias(o))
 	}
-	m := map[string]any{
-		"type":      o.Type,
-		"id":        o.ID,
-		"call_id":   o.CallID,
-		"execution": "client",
-		"arguments": toolSearchCallArgumentsJSON(o.Arguments),
-	}
-	if o.Status != "" {
-		m["status"] = o.Status
-	}
-	return json.Marshal(m)
 }
 
 // UnmarshalJSON accepts both the Responses function-call string form and the
@@ -478,6 +486,57 @@ type ResponsesUsage struct {
 	// Optional detailed breakdown
 	InputTokensDetails  *ResponsesInputTokensDetails  `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails *ResponsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
+}
+
+// MarshalJSON 保证 usage 的明细字段始终出现在线上。
+//
+// input_tokens_details / output_tokens_details 原本是「指针 + omitempty」：没有缓存
+// 命中或没有推理 token 时指针为 nil，整个字段就从 JSON 里消失；即便指针非 nil，内部的
+// cached_tokens / reasoning_tokens 也带 omitempty，取 0 时同样消失。严格客户端
+// (Codex CLI) 把它们当必填,于是报 `missing field input_tokens_details`。
+//
+// 这里显式构造：两个明细对象恒存在，各自的核心计数恒输出（哪怕是 0）。
+func (u ResponsesUsage) MarshalJSON() ([]byte, error) {
+	m := map[string]any{
+		"input_tokens":  u.InputTokens,
+		"output_tokens": u.OutputTokens,
+		"total_tokens":  u.TotalTokens,
+	}
+	if u.CacheCreationInputTokens > 0 {
+		m["cache_creation_input_tokens"] = u.CacheCreationInputTokens
+	}
+
+	inputDetails := map[string]any{"cached_tokens": 0}
+	if u.InputTokensDetails != nil {
+		inputDetails["cached_tokens"] = u.InputTokensDetails.CachedTokens
+		if u.InputTokensDetails.AudioTokens > 0 {
+			inputDetails["audio_tokens"] = u.InputTokensDetails.AudioTokens
+		}
+		if u.InputTokensDetails.CacheCreationTokens > 0 {
+			inputDetails["cache_creation_tokens"] = u.InputTokensDetails.CacheCreationTokens
+		}
+		if u.InputTokensDetails.CacheWriteTokens > 0 {
+			inputDetails["cache_write_tokens"] = u.InputTokensDetails.CacheWriteTokens
+		}
+	}
+	m["input_tokens_details"] = inputDetails
+
+	outputDetails := map[string]any{"reasoning_tokens": 0}
+	if u.OutputTokensDetails != nil {
+		outputDetails["reasoning_tokens"] = u.OutputTokensDetails.ReasoningTokens
+		if u.OutputTokensDetails.AudioTokens > 0 {
+			outputDetails["audio_tokens"] = u.OutputTokensDetails.AudioTokens
+		}
+		if u.OutputTokensDetails.AcceptedPredictionTokens > 0 {
+			outputDetails["accepted_prediction_tokens"] = u.OutputTokensDetails.AcceptedPredictionTokens
+		}
+		if u.OutputTokensDetails.RejectedPredictionTokens > 0 {
+			outputDetails["rejected_prediction_tokens"] = u.OutputTokensDetails.RejectedPredictionTokens
+		}
+	}
+	m["output_tokens_details"] = outputDetails
+
+	return json.Marshal(m)
 }
 
 func (u *ResponsesUsage) UnmarshalJSON(data []byte) error {
@@ -609,8 +668,14 @@ type ResponsesStreamEvent struct {
 	Code  string `json:"code,omitempty"`
 	Param string `json:"param,omitempty"`
 
-	// Sequence number for ordering events
-	SequenceNumber int `json:"sequence_number,omitempty"`
+	// SequenceNumber 在每个 Responses SSE 事件里都是必填的。**不能加 omitempty**：
+	// 流里第一个事件 response.created 的 seq 恒为 0,一旦被省略,Rust 客户端
+	// (Codex CLI) 直接报 `missing field sequence_number` 让整条流失败。
+	//
+	// 带 index 的事件类型由 responses_stream_event_wire.go 的 MarshalJSON 显式构造,
+	// 但 response.created/completed/done/failed/incomplete 走 default 分支的结构体
+	// 序列化,只能靠这里的 tag 保证字段存在。
+	SequenceNumber int `json:"sequence_number"`
 }
 
 // ---------------------------------------------------------------------------

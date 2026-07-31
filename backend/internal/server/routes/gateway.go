@@ -275,6 +275,20 @@ func RegisterGatewayRoutes(
 		h.OpenAIGateway.ResponsesWebSocket(c)
 	})
 	r.GET("/models", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, modelsHandler)
+	// Claude Messages API（不带v1前缀的别名）— 与 /v1/messages 同逻辑。
+	//
+	// 定制补充：根路径此前有 /responses、/chat/completions、/models，甚至
+	// /messages/count_tokens，**唯独漏了 /messages 本身**。客户端(如 Grok-Desktop
+	// 的 anthropic messages 后端)把 base_url 配成不带 /v1 时会打到这里，未注册就
+	// 落进前端 SPA fallback 拿到 200 + HTML——既不是 404 也没有任何错误提示，
+	// 表现为客户端一直转圈重试。见 CUSTOM_CHANGES.md。
+	r.POST("/messages", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), compositeTarget, requireGroupAnthropic, func(c *gin.Context) {
+		if isOpenAIResponsesCompatibleGatewayPlatform(c) {
+			h.OpenAIGateway.Messages(c)
+			return
+		}
+		h.Gateway.Messages(c)
+	})
 	r.POST("/messages/count_tokens", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), compositeTarget, requireGroupAnthropic, countTokensHandler)
 	codexDirect := r.Group("/backend-api/codex")
 	codexDirect.Use(bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), compositeTarget, requireGroupAnthropic)

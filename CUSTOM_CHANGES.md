@@ -17,6 +17,70 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.168-custom.2（2026-07-31）
+
+修复严格客户端（grok-shell / Grok-Desktop，Rust+serde 实现）完全无法使用的一系列问题。
+共 7 处，全部带回归测试。**触发场景**：客户端走 `/v1/responses` 或 Anthropic Messages 协议，
+每个缺失字段都会让整条流直接失败（`serialization error: missing field xxx`）。
+
+### Responses 协议必填字段（5 处）
+
+`omitempty` 吃掉了规范要求必须存在的零值：
+
+| 字段 | 成因 | 位置 |
+|---|---|---|
+| `created_at` | `ResponsesResponse` 根本没这个字段 | `apicompat/types.go` + 6 个构造点 |
+| `sequence_number` | omitempty + 首个事件 seq=0 恒被丢弃 | `apicompat/types.go` |
+| `content` / `arguments` / `summary` | `response.completed` 的 output 项走默认序列化，没走 `responsesItemWire` | `apicompat/types.go`（`ResponsesOutput.MarshalJSON` 统一走 wire） |
+| `annotations` | message item 内的 content 数组没跟上 `outputTextPartWire` | `apicompat/responses_stream_event_wire.go`（`messageContentWire`） |
+| `input_tokens_details` | 指针 + omitempty，nil 时整个字段消失 | `apicompat/types.go`（新增 `ResponsesUsage.MarshalJSON`） |
+
+护栏：`apicompat/responses_wire_required_fields_test.go` 把整条流真实跑一遍，
+按类型逐条核对 19 种事件 / 4 种 item / 2 种 part / usage 两级明细，两条转换链路都覆盖。
+**再遇到 `missing field xxx` 先把字段加进那份清单再跑，不要靠线上报错一个个补。**
+
+### 根路径网关别名被前端中间件吞掉（1 处，最隐蔽）
+
+`internal/web/embed_on.go` 的 `shouldBypassEmbeddedFrontend` 是一份**手工维护的放行清单**，
+与 `routes/gateway.go` 实际注册的根路径别名**早已脱节**：`/responses`、`/models`、`/images/*`
+在清单里，而 **`/messages`、`/chat/completions`、`/embeddings` 不在**。
+
+该中间件是 `r.Use()` 全局注册、位置在所有路由**之前**，漏放行的路径被它直接返回
+**200 + index.html**——不是 404、没有任何错误提示，客户端拿到 HTML 只能一直重试转圈。
+三层伪装（200 状态码 + 有响应体 + 访问日志记成功）让它极难定位，唯一破绽是
+`latency_ms: 0` 和缺失 `client_request_id`。
+
+已补齐清单，并加双向回归测试（`web/embed_test.go`）：正向锁住所有根路径别名必须放行，
+反向锁住 `/login`、`/dashboard` 等 SPA 路由不能被误放行。**这份清单与根路径路由注册必须同步维护。**
+
+### Anthropic thinking 块缺 `signature`（1 处）
+
+Antigravity 走的是独立的 `internal/pkg/antigravity` 包（用 `map[string]any` 手工拼 JSON），
+不经过 `apicompat`。thinking 块的 `content_block_start` 只有 `{"thinking":"","type":"thinking"}`，
+缺 `signature`——官方格式是 `{"type":"thinking","thinking":"","signature":""}`。
+
+- `antigravity/stream_transformer.go`：两处手工构造的 thinking 块补 `signature`
+- `antigravity/claude_types.go`：`ClaudeContentItem` 新增 `MarshalJSON`，thinking 项恒带 thinking + signature
+- `apicompat/types.go`：`AnthropicContentBlock` 的 thinking 分支同样恒带 signature（其它链路用）
+- ⚠️ **上游测试 `TestStreamingReasoning` 的断言被改为包含 signature**，合并上游时若被改回即为定制被覆盖
+
+### 测试连接的模型下拉改用账号真实 mapping
+
+`handler/admin/account_handler.go` 的 `GetAvailableModels`，Antigravity 分支此前**无条件返回**
+硬编码的 `antigravity.DefaultModels()`，忽略账号的 `model_mapping`（「同步上游支持的模型」拉取
+的上游真实列表）。导致「测试账号连接」的下拉与「编辑账号 → 模型限制」对不上，还能选到账号
+不支持的模型。已按 OpenAI/Gemini/Grok 三个分支的既有模式补齐：有 mapping 就用 mapping
+（不在 DefaultModels 里的上游新模型按名回落），无 mapping 才回落默认；输出按 ID 排序。
+
+### ⚠️ 试过但回滚：不要补发 `response.in_progress`
+
+官方 Responses SSE 序列是 `created → in_progress → output_item.added`，本仓库从不发
+`in_progress`（代码里该字符串只出现在**接收**方向）。曾据此补发，结果 grok-shell 从
+「只丢开头」恶化为「完全不渲染」，而 `usage_logs` 显示那几次请求全部成功、output_tokens
+661/783/811 正常。已回滚并在两处代码留注释。
+
+**教训**：「我们违反了官方协议」是事实，但由此推出「补上就能解决用户的症状」是没有证据的猜测。
+
 ## v0.1.168 合并（2026-07-31，main）
 
 合并上游 tag `v0.1.168` 到 `main`（上一基线 `v0.1.163`，中间跨 164/165/166，共 121 个非合并提交）。冲突处理要点：
@@ -211,6 +275,11 @@
 | CPA(xai-*.json)导入 | `handler/admin/account_data_xai.go`、`account_data.go`（`XaiAccounts`）、前端 `ImportDataModal.vue` / `utils/xaiImport.ts` |
 | **shadowsocks 出站代理**（ss + simple-obfs/tls 内嵌拨号；Clash 订阅导入）<br>**⚠ 见下方「ss 出站代理：合并上游必查清单」** | `pkg/shadowsocks/`（config/dialer/obfs_tls）、`pkg/clashsub/`、`pkg/proxyurl/parse.go`（`allowedSchemes` 含 `ss`）、`pkg/proxyutil/dialer.go`（`case "ss"`）、`repository/http_upstream.go`（TLS 指纹分派 `case "ss"`）、`repository/req_client_pool.go`（`applyReqClientProxy`）、`service/openai_ws_client.go`（`proxyHTTPClient`）、`migrations/9001_custom_proxy_extra.sql`、`ent/schema/proxy.go`（`extra`）、`service/proxy.go`（`Extra` + `URL()` 拼 query）、`handler/admin/proxy_subscription.go`、`handler/admin/proxy_handler.go`（`oneof` 白名单含 ss）、前端 `ProxiesView.vue` / `types/index.ts` / `api/admin/proxies.ts` |
 | 导入后刷新+测试流水（取代 probe；**合并上游须保留 importData 替换点**） | `handler/admin/grok_import_pipeline.go`、`account_data.go` |
+| **Responses SSE 必填字段**（`created_at` / `sequence_number` / `annotations` / `input_tokens_details` / completed 的 output 项字段）<br>严格客户端(grok-shell 等 Rust+serde)缺一个就整条流失败 | `pkg/apicompat/types.go`（`ResponsesResponse.CreatedAt`、`SequenceNumber` 无 omitempty、`ResponsesOutput.MarshalJSON` 统一走 wire、`ResponsesUsage.MarshalJSON`）、`responses_stream_event_wire.go`（`messageContentWire` 带 annotations/logprobs）<br>护栏：`responses_wire_required_fields_test.go` |
+| **根路径网关别名的前端放行清单**（`/messages` `/chat/completions` `/embeddings`）<br>⚠ 漏放行→返回 200+HTML 而非 404，客户端静默转圈，极难定位 | `web/embed_on.go`（`shouldBypassEmbeddedFrontend`）+ `routes/gateway.go` 根路径 `/messages` 路由<br>护栏：`web/embed_test.go` 双向断言。**该清单与根路径路由注册必须同步维护** |
+| **Anthropic thinking 块恒带 `signature`**（官方格式 `{"type":"thinking","thinking":"","signature":""}`） | `pkg/antigravity/stream_transformer.go`(2 处)、`pkg/antigravity/claude_types.go`(`ClaudeContentItem.MarshalJSON`)、`pkg/apicompat/types.go`(`AnthropicContentBlock` thinking 分支)<br>⚠ 上游 `TestStreamingReasoning` 断言已改为含 signature |
+| **测试连接模型下拉用账号 `model_mapping`**（Antigravity 分支原本无条件返回硬编码 DefaultModels） | `handler/admin/account_handler.go`（`GetAvailableModels` 的 Antigravity 分支） |
+| **不要补发 `response.in_progress`**（试过更糟，见上文 v0.1.168-custom.2 条目） | `pkg/apicompat/anthropic_to_responses_response.go`、`chatcompletions_responses_bridge.go` 的注释 |
 
 ### ss 出站代理：合并上游必查清单
 
