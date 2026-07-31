@@ -209,6 +209,60 @@ func TestPatchGrokResponsesBodyDropsToolChoiceWhenNoSupportedToolsRemain(t *test
 	require.False(t, gjson.GetBytes(patched, "tool_choice").Exists())
 }
 
+func TestSanitizeGrokResponsesToolsKeepsToolChoiceOnlyWithSupportedTools(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		body           string
+		wantTools      bool
+		wantToolChoice bool
+	}{
+		{
+			name: "missing tools with string tool choice",
+			body: `{"input":"hello","tool_choice":"auto"}`,
+		},
+		{
+			name: "missing tools with object tool choice",
+			body: `{"input":"hello","tool_choice":{"type":"function","name":"lookup"}}`,
+		},
+		{
+			name:      "empty tools",
+			body:      `{"input":"hello","tools":[],"tool_choice":"auto"}`,
+			wantTools: true,
+		},
+		{
+			name: "all tools unsupported",
+			body: `{"input":"hello","tools":[{"type":"namespace","name":"client_tools"}],"tool_choice":"auto"}`,
+		},
+		{
+			name:           "supported tool",
+			body:           `{"input":"hello","tools":[{"type":"function","name":"lookup"}],"tool_choice":"auto"}`,
+			wantTools:      true,
+			wantToolChoice: true,
+		},
+		{
+			name:           "malformed non-array tools remain untouched",
+			body:           `{"input":"hello","tools":{"type":"function","name":"lookup"},"tool_choice":"auto"}`,
+			wantTools:      true,
+			wantToolChoice: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			patched, err := sanitizeGrokResponsesTools([]byte(tt.body))
+			require.NoError(t, err)
+			require.True(t, json.Valid(patched))
+			require.Equal(t, tt.wantTools, gjson.GetBytes(patched, "tools").Exists())
+			require.Equal(t, tt.wantToolChoice, gjson.GetBytes(patched, "tool_choice").Exists())
+			if tt.wantToolChoice {
+				require.Equal(t, "auto", gjson.GetBytes(patched, "tool_choice").String())
+			}
+		})
+	}
+}
+
 func TestPatchGrokResponsesBodyPromotesCodexAdditionalTools(t *testing.T) {
 	t.Parallel()
 
@@ -1952,6 +2006,37 @@ func TestAccountTestServiceGrokAPIKeyAllowsConfiguredHTTPWhenGlobalPolicyDoes(t 
 	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
 }
 
+// 定制: 测试路径非 429 的 HTTP 失败直接置错(上游 v0.1.168 改为 402 → 30 分钟临时不可调度,本仓库不采用)。
+func TestAccountTestServiceGrokOAuthPaymentRequiredSetsAccountError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	account := healthyGrokOAuthGatewayTestAccount(56, "access-token")
+	repo := &grokQuotaAccountRepo{}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusPaymentRequired,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"code":"personal-team-blocked:spending-limit"}`)),
+	}}
+	svc := &AccountTestService{
+		accountRepo:       repo,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
+		httpUpstream:      upstream,
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/56/test", nil)
+
+	err := svc.testGrokAccountConnection(c, account, "grok")
+
+	require.Error(t, err)
+	require.Zero(t, repo.tempUnschedCalls)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Equal(t, account.ID, repo.lastErrorID)
+	require.Contains(t, repo.lastErrorMsg, "Grok Responses API returned 402")
+	require.Contains(t, recorder.Body.String(), `"type":"error"`)
+	require.Contains(t, recorder.Body.String(), "Grok Responses API returned 402")
+}
+
 func TestForwardAsChatCompletionsForGrokStreamingUsesRawXAIChatCompletions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -2454,6 +2539,36 @@ func TestHandleGrokAccountUpstreamErrorSetsErrorForNonRateLimitStates(t *testing
 			require.Equal(t, 1, repo.setErrorCalls)
 			require.Equal(t, account.ID, repo.lastErrorID)
 			require.Contains(t, repo.lastErrorMsg, tt.wantReason)
+		})
+	}
+}
+
+// 定制: 网关侧 Grok 非 429 错误一律直接置错,不再按 pool mode 做 2 分钟临时不可调度
+// (上游 v0.1.168 的 TestHandleGrokAccountUpstreamError5xxRespectsPoolMode 断言的是上游策略)。
+func TestHandleGrokAccountUpstreamError5xxSetsErrorRegardlessOfPoolMode(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		credentials map[string]any
+	}{
+		{name: "pool mode", credentials: map[string]any{"pool_mode": true}},
+		{name: "non-pool mode"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{
+				ID:          611,
+				Platform:    PlatformGrok,
+				Type:        AccountTypeAPIKey,
+				Credentials: tt.credentials,
+			}
+			repo := &grokQuotaAccountRepo{}
+			svc := &OpenAIGatewayService{accountRepo: repo}
+
+			svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusBadGateway, nil, nil)
+
+			require.Zero(t, repo.tempUnschedCalls)
+			require.Equal(t, 1, repo.setErrorCalls)
+			require.Equal(t, account.ID, repo.lastErrorID)
+			require.Contains(t, repo.lastErrorMsg, "grok upstream error: HTTP 502")
 		})
 	}
 }

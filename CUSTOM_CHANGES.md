@@ -17,6 +17,26 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.168 合并（2026-07-31，main）
+
+合并上游 tag `v0.1.168` 到 `main`（上一基线 `v0.1.163`，中间跨 164/165/166，共 121 个非合并提交）。冲突处理要点：
+
+- README 保留定制版说明；`README_CN.md` / `README_JA.md` 本仓库已删除，保持删除
+- VERSION 写 `0.1.168`（上游 tag 内 VERSION 文件仍是 0.1.166，按标签基线写入；发布时 CI 再同步为 `0.1.168-custom.N`）
+- **wire 全链路（`cmd/server/wire.go`、`wire_gen.go`、`wire_gen_test.go`、`handler/wire.go`、`service/wire.go`）**：上游新增 `OllamaCloudUsageService`，与定制的 `AccountPatrolService` 落在同一批参数/清理步骤上——**两者都保留**，顺序 `accountPatrol, ollamaCloudUsage`
+- **`openai_gateway_grok.go`**：上游把 401 → 10 分钟、402 → 30 分钟临时不可调度，5xx 按 pool mode 做 2 分钟冷却；**本仓库继续用定制策略「非 429 一律直接 SetError」**，未采纳上游这几条分支
+- **`account_test_service.go`**：同上，上游给测试路径的 402 加了 30 分钟临时不可调度，定制保持「非 429 的 HTTP 失败直接置错」
+- 相应改写了上游随之新增的 3 个测试（它们断言的是上游策略，直接合入必红）：
+  - `TestAccountTestServiceGrokOAuthPaymentRequiredTemporarilyUnschedulesAccount` → `...PaymentRequiredSetsAccountError`
+  - `TestHandleGrokAccountUpstreamError5xxRespectsPoolMode` → `...5xxSetsErrorRegardlessOfPoolMode`（定制不区分 pool mode）
+  - `TestHandleGrokAccountUpstreamError402RecoversAfterCooldownExpiry` 删除（定制下 402 直接置错，无冷却可恢复）
+- `admin_service_bulk_update_test.go`：采用上游扩充后的 repo stub（新增 `Create`/`Update`/`bindGroupsByAccount` 等），**保留**定制字段 `bulkUpdateValue` 与 `TestAdminServiceBulkUpdateAccountsExpirationTriState`
+- `go.sum`：取上游版本后 `go mod tidy` 重新补回 `go-shadowsocks2` 及其传递依赖
+- 前端 `api/admin/accounts.ts` 与 `i18n/{en,zh}/admin/accounts.ts`：定制的 `AccountPatrolSettings` / `patrol` 文案与上游新增的 `OllamaCloudUsage*` / `ollamaCloud` 文案**并存**
+- ss 出站代理必查清单 9 条逐条回读确认未丢（`normalizeProxyURL` 保留 RawQuery、`UpdateProxy` 的 `input.Extra != nil` 守卫、`req_client_pool` 的 ss 分支、`import-subscription` 路由、ent `extra` 生成代码、`9001_` 迁移等）
+
+上游 0.1.164–0.1.168 主要能力：Passkey 登录与设置开关、OpenAI Live（Realtime）网关与 macOS attestation、Ollama Cloud 官方用量抓取与自动刷新、复合模型路由（`composite_model_routes` 表）、模型广场与分组维度定价展示、Kimi K3 与 claude-opus-5 适配、面板 API 限流、客户端 session id 持久化、支付宝移动端 precreate deep link，以及大量网关兼容性与移动端布局修复。
+
 ## v0.1.163 合并（2026-07-23，custom/v0.1.163）
 
 合并上游 `v0.1.163` 到分支 `custom/v0.1.163`（自 `main` 切出）。冲突处理要点：
@@ -182,7 +202,7 @@
 | 发布流水线定制 | `.goreleaser.simple.yaml` |
 | 自有仓库引用 | `VersionBadge.vue` 常量、`deploy/install.sh` `GITHUB_REPO` |
 | 账号批量测试端点（POST `/accounts/batch-test`，`models_by_platform` 按平台选模型） | `handler/admin/account_handler.go`（`BatchTest`）、`routes/admin.go`、前端 `AccountsView.vue` / `AccountBulkActionsBar.vue` / `BatchTestConfirmModal.vue` / `accounts.ts` |
-| 测试失败/Grok 非429请求错误直接置错 + 手动置错（HTTP 错误/取 token 失败→SetError；429 仍限流；永久 error 亦可管理员手动/批量 set-error） | `service/account_test_service.go`、`handler/admin/account_handler.go`（`SetError`/`BatchSetError`）、`routes/admin.go`、前端账号操作菜单与批量栏 |
+| 测试失败/Grok 非429请求错误直接置错 + 手动置错（HTTP 错误/取 token 失败→SetError；429 仍限流；永久 error 亦可管理员手动/批量 set-error）<br>**不区分 pool mode，也不采纳上游对 401/402/5xx 的临时不可调度分支**（上游 v0.1.168 起有这些分支，合并时必删） | `service/account_test_service.go`、`service/openai_gateway_grok.go`（`handleGrokAccountUpstreamError` 的 `default` 分支）、`handler/admin/account_handler.go`（`SetError`/`BatchSetError`）、`routes/admin.go`、前端账号操作菜单与批量栏 |
 | **账号巡检**（全局开关；定期分批连接测试；失败 SetError；成功 Recover） | `service/account_patrol_service.go`、`handler/admin/account_patrol.go`、`routes/admin.go`、前端 `AccountPatrolSettingsModal.vue` / `AccountsView.vue` |
 | **temp 累计 3 次自动置错**（任意入口真正 re-entry 计次；窗口延长不计；达 3 次 → SetError + 清 temp） | `service/temp_unsched_entry_counter.go`、`repository/temp_unsched_entry_counter_cache.go`、`repository/account_repo.go`（`SetTempUnschedulable` / Grok CAS 路径挂钩） |
 | **测试/恢复成功 → 完全正常**（ClearError + 强制 `schedulable=true` + 清 temp re-entry 计数） | `service/ratelimit_service.go`（`RecoverAccountState` / `RecoverAccountAfterSuccessfulTest`） |

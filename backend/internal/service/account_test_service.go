@@ -221,6 +221,20 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 
+	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
+	// interactions, but intentionally do not send their placeholder credentials
+	// to an upstream provider.
+	if account.IsSyntheticUITest() {
+		testModelID := modelID
+		if testModelID == "" {
+			testModelID = claude.DefaultTestModel
+		}
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+		s.sendEvent(c, TestEvent{Type: "content", Text: "Synthetic Anthropic OAuth account is healthy and interactive."})
+		s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+		return nil
+	}
+
 	// Route to platform-specific test method
 	if account.IsOpenAI() {
 		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
@@ -826,7 +840,8 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body))
-		// 定制:除 429 限流外,400/403/502 等错误响应统一置错停调度;网络错误不改状态
+		// 定制:除 429 限流外,400/402/403/502 等错误响应统一置错停调度;网络错误不改状态
+		// (上游 v0.1.168 对 402 改为 30 分钟临时不可调度,与本仓库"非 429 直接置错"定制冲突,保留定制)
 		s.markAccountTempUnschedOnTestHTTPFailure(ctx, account.ID, resp.StatusCode, errMsg)
 		return s.sendErrorAndEnd(c, errMsg)
 	}
