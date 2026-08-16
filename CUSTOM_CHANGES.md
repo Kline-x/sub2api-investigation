@@ -17,6 +17,25 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.177-custom.1（2026-08-16，main）
+
+合并上游 tag `v0.1.177` 到 `main`（上一基线 `v0.1.168`，中间跨 169–176，共 447 个非合并提交）。冲突处理要点：
+
+- **README** 保留定制版说明；`README_CN.md` / `README_JA.md` 跟随上游删除（本仓库已删，保持删除）
+- VERSION 写 `0.1.177-custom.1`
+- **wire 链路**：上游为 `AccountPatrolRecordStore` 引入新依赖注入需求，但**定制分支没有 provider**（`account_patrol_record_repo.go` 存在 repository→service 的 import 环，wire 无法自动生成）。处理：`cmd/server/wire.go`（组合根）加 `wire.Bind(AccountPatrolRecordStore → *repository.AccountPatrolRecordRepository)`，`repository/wire.go` ProviderSet 加 `NewAccountPatrolRecordRepository`，`wire_gen.go` 用 `wire@v0.7.0` 重新生成。**此处带注释说明循环依赖成因，合并上游再动 wire 前先读**
+- **`openai_gateway_grok.go` / `account_test_service.go` / `grok_quota_service.go` 及测试**：上游 v0.1.177 引入 `applyGrokUpstreamFailureDecision`（429 冷却、pool mode 区分、免费额度按上游 reset header）；**本仓库继续用定制策略**——429+免费额度耗尽封禁 24h、裸 429 指数递增封禁、**非 429 一律直接 SetError（不区分 pool mode、不用冷却）**。上游函数保留但**不被调用**，删除前确认调用点
+- **9 个上游 grok 测试断言改写**为定制行为预期（403 置错而非 temp-unsched、免费额度 24h 而非上游 reset 等），集中在 `service/grok_upstream_failure_test.go`、`service/grok_p2_test.go`、`service/grok_upstream_errors_test.go`。合并上游若看到这些测试被改回上游语义即定制被覆盖
+- **`grok_oauth_client_test.go`**：上游把 `NewGrokOAuthClient` 改为 fail-closed 的 `ValidatedTokenURL()`，注入 loopback token endpoint 必须 `EnvAllowUnsafeURLOverrides=true`。自有的 `TestGrokOAuthClientStatusErrorCarriesUpstreamStatusCause` 补上该 env（否则打真实 x.ai 返回 401）
+- **前端 `AccountsView.vue` / `AccountBulkActionsBar.vue`**：上游 v0.1.177 重做全选（`handleSelectAllResults` / `total-results` / `all-results-selected` / `select-all-results`，一次拉 1000 条）；**本仓库保留定制契约**（`filtered-total` / `all-filtered-selected` / `@select-filtered` / `selectAllFiltered` + `selectedAccountMeta` 平台元数据缓存），不采用上游全选重构。合并时保留本仓库 props/emits、删除上游 handler
+- **上游新增测试 `AccountsView.selectAllResults.spec.ts` 删除**（测的是被废弃的 select-all-results 功能；定制 select-filtered 已有 `AccountsView.selectionRefresh.spec.ts` 覆盖）
+- **`handleBulkProbeUpstreamBilling`**：改为与单条探测一致的 `refreshAccountsAfterUpstreamBillingProbe()`（探测成功后无条件重载当前页），满足上游新增测试「批量探测后刷新页面并显示同步倍率」（此前仅在按 `upstream_billing_rate` 排序时才重载）
+- **前端 i18n `admin/accounts.ts`**：双方 key 并存；同名 key（`selectingAll`、`selectAllFailed`）取本仓库文案
+- 批量编辑测试合并双方用例：本仓库「批量改到期时间」+ 上游「倍率同步冲突提示/专用错误」并存
+- `.goreleaser.simple.yaml` 自动合并成功且保留 `prerelease: false`、archives、checksums（合并时勿改）
+
+上游 0.1.169–0.1.177 主要能力：Grok 密码/SSO 登录、ReAuth 弹窗与 OAuth 凭证形态统一、Grok Voice TTS/STT/Realtime 与分组音频定价、视频按模型族定价、模型目录与可配置映射、P2 模型额度软封与 spending reauth、stream idle 换号与 team+model 冷却、渠道监控 v2（被动聚合、只读 API、Ops 界面）、Grok JWT tier 识别订阅档位、grok-4.6 目录与定价、`/x_search` 独立搜索与计费、Codex OAuth 设备指纹收敛、分组逐模型定价与长上下文阶梯开关、账单探测扩展到全部 API-key 平台并可选同步上游声明倍率、内容审核走可配置代理、按筛选结果全选账号（上游版）、批量删除并发限制、邮件域名注册配额开关、备份大文件分片、安全审计窄范围与 Qwen3Guard 辅助字段。
+
 ## v0.1.168-custom.2（2026-07-31）
 
 修复严格客户端（grok-shell / Grok-Desktop，Rust+serde 实现）完全无法使用的一系列问题。

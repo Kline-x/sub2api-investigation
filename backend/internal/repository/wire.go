@@ -98,9 +98,11 @@ var ProviderSet = wire.NewSet(
 	NewTLSFingerprintProfileRepository,
 	NewChannelRepository,
 	NewChannelMonitorRepository,
+	NewChannelMonitorV2Repository,
 	NewChannelMonitorRequestTemplateRepository,
 	NewContentModerationRepository,
 	NewAffiliateRepository,
+	NewAccountPatrolRecordRepository, // 定制:账号巡检记录仓储
 	NewUserPlatformQuotaRepository,     // T14: user × platform quota
 	NewUserPlatformQuotaServiceAdapter, // T14: adapter → service.UserPlatformQuotaRepository
 
@@ -150,6 +152,8 @@ var ProviderSet = wire.NewSet(
 
 	// HTTP service ports (DI Strategy A: return interface directly)
 	NewTurnstileVerifier,
+	NewTencentCaptchaVerifier,
+	NewAliyunCaptchaVerifier,
 	ProvidePricingRemoteClient,
 	ProvideGitHubReleaseClient,
 	NewProxyExitInfoProber,

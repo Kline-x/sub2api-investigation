@@ -22,16 +22,17 @@ import (
 const (
 	grokComposerImageBridgeVisionModel     = "grok-build-0.1"
 	grokComposerImageBridgeMaxOutputTokens = 512
-	grokUpstreamUserAgent                  = "sub2api-grok/1.0"
-	grokCLIVersion                         = "0.2.93"
-	grokDefaultResponsesModel              = "grok-4.5"
-	grokRateLimitFallbackCooldown          = 2 * time.Minute
-	grokFreeUsageWindow                    = 24 * time.Hour
-	grokFreeUsageExhaustedUntilExtraKey    = "grok_free_usage_exhausted_until"
-	grokRateLimitRepeatCooldown            = 10 * time.Minute
-	grokRateLimitSustainedCooldown         = 30 * time.Minute
-	grokRateLimitMaxAdaptiveCooldown       = time.Hour
-	grokRateLimitBackoffQuietPeriod        = time.Hour
+	// grokUpstreamUserAgent lives in grok_upstream_headers.go (shared with TLS header helpers).
+	grokCLIVersion                = xai.CLIClientVersion
+	grokDefaultResponsesModel     = "grok-4.5"
+	grokRateLimitFallbackCooldown = 2 * time.Minute
+	// 定制:grok 免费额度耗尽封禁窗口与 account extra 标记键(上游无此常量)。
+	grokFreeUsageWindow                 = 24 * time.Hour
+	grokFreeUsageExhaustedUntilExtraKey = "grok_free_usage_exhausted_until"
+	grokRateLimitRepeatCooldown         = 10 * time.Minute
+	grokRateLimitSustainedCooldown      = 30 * time.Minute
+	grokRateLimitMaxAdaptiveCooldown    = time.Hour
+	grokRateLimitBackoffQuietPeriod     = time.Hour
 	// 裸 429(无 retry-after / 无窗口 reset / 非 free 耗尽文案)连击的递增封禁上限,
 	// 以及连击多久无复发后归零重计。
 	grokBare429EscalationCap    = time.Hour
@@ -131,6 +132,10 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	if strings.TrimSpace(upstreamModel) == "" {
 		upstreamModel = grokDefaultResponsesModel
 	}
+	// Account mappings are optional. Canonicalize client aliases even when the
+	// account has no model_mapping, matching the Chat Completions path and xAI's
+	// actual Responses model IDs.
+	upstreamModel = xai.ResolveGrokTextResponsesModelID(upstreamModel, grokDefaultResponsesModel)
 	if isGrokImageGenerationModel(upstreamModel) {
 		return nil, fmt.Errorf("model %s is an image model and is not available on the Responses endpoint; use /v1/images/generations instead", upstreamModel)
 	}
@@ -183,7 +188,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	upstreamStart := time.Now()
 	var resp *http.Response
 	for attempt := 0; ; attempt++ {
-		upstreamReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, token, cacheIdentity, s.cfg)
+		upstreamReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, token, cacheIdentity, s.cfg, s.settingService)
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -243,7 +248,13 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			Kind:               kind,
 			Message:            upstreamMsg,
 		})
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		errCtx := withGrokTeamRateLimitModel(ctx, upstreamModel)
+		s.handleGrokAccountUpstreamError(errCtx, account, resp.StatusCode, resp.Header, respBody)
+		// 429 / free-usage: stamp team+model cool so sibling accounts skip this model.
+		if resp.StatusCode == http.StatusTooManyRequests ||
+			classifyGrokUpstreamFailure(resp.StatusCode, respBody, upstreamModel).Class == GrokFailureFreeUsage {
+			markGrokTeamModelRateLimit(account, upstreamModel, resolveGrokTeamRateLimitUntil(time.Now().Add(grokTeamRateLimitDefaultTTL), time.Now()))
+		}
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
@@ -255,17 +266,23 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
 	}
 
-	s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
+	// Attach model so rate-limit snapshots can fan out a team+model cool.
+	stateCtx := withGrokTeamRateLimitModel(ctx, upstreamModel)
+	s.updateGrokUsageFromResponse(stateCtx, account, resp.Header, resp.StatusCode)
 
 	var usage *OpenAIUsage
 	var firstTokenMs *int
 	responseID := ""
+	searchCount := 0
+	imageCount := 0
+	var imageOutputSizes []string
 	if reqStream {
+		maxLineSize := defaultMaxLineSize
+		if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
+			maxLineSize = s.cfg.Gateway.MaxLineSize
+		}
+		resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, maxLineSize)
 		if hasGrokResponsesClientToolMapping(clientToolMapping) {
-			maxLineSize := defaultMaxLineSize
-			if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-				maxLineSize = s.cfg.Gateway.MaxLineSize
-			}
 			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, clientToolMapping, maxLineSize)
 		}
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
@@ -275,6 +292,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		responseID = strings.TrimSpace(streamResult.responseID)
+		searchCount = streamResult.searchCount
+		imageCount = streamResult.imageCount
+		imageOutputSizes = streamResult.imageOutputSizes
 	} else {
 		nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 		if err != nil {
@@ -282,13 +302,16 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		}
 		usage = nonStreamResult.usage
 		responseID = strings.TrimSpace(nonStreamResult.responseID)
+		searchCount = nonStreamResult.searchCount
+		imageCount = nonStreamResult.imageCount
+		imageOutputSizes = nonStreamResult.imageOutputSizes
 	}
 
 	if usage == nil {
 		usage = &OpenAIUsage{}
 	}
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
-	return &OpenAIForwardResult{
+	result := &OpenAIForwardResult{
 		RequestID:       firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
 		ResponseID:      responseID,
 		Usage:           *usage,
@@ -300,7 +323,17 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		ResponseHeaders: resp.Header.Clone(),
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
-	}, nil
+	}
+	// Propagate search/image counters from the shared Responses handler — without
+	// this, stream/JSON counting runs but search_price_per_1k / image bills never apply.
+	if searchCount > 0 {
+		result.SearchCount = searchCount
+	}
+	if imageCount > 0 {
+		result.ImageCount = imageCount
+		result.ImageOutputSizes = imageOutputSizes
+	}
+	return result, nil
 }
 
 func isGrokInvalidEncryptedContentResponse(statusCode int, body []byte) bool {
@@ -491,7 +524,13 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("invalid json request body")
 	}
-	out, err := sjson.SetBytes(body, "model", upstreamModel)
+	// sjson may reuse the input backing array; keep the caller's request bytes
+	// unchanged because the same body can be inspected for billing/retry paths.
+	out, err := sjson.SetBytes(append([]byte(nil), body...), "model", upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	out, err = normalizeGrokResponsesReasoningEffort(out, upstreamModel)
 	if err != nil {
 		return nil, err
 	}
@@ -509,6 +548,16 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	}
 	if strings.EqualFold(upstreamModel, "grok-4.5") {
 		for _, unsupportedField := range []string{"presence_penalty", "presencePenalty", "frequency_penalty", "frequencyPenalty", "stop"} {
+			if gjson.GetBytes(out, unsupportedField).Exists() {
+				out, err = sjson.DeleteBytes(out, unsupportedField)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if grokModelRejectsLogprobs(upstreamModel) {
+		for _, unsupportedField := range []string{"logprobs", "top_logprobs"} {
 			if gjson.GetBytes(out, unsupportedField).Exists() {
 				out, err = sjson.DeleteBytes(out, unsupportedField)
 				if err != nil {
@@ -540,6 +589,17 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	return out, nil
 }
 
+// xAI's Grok 4.20 family and newer models do not support OpenAI's logprobs
+// fields. Remove them before egress instead of forwarding a request the
+// upstream rejects. Older Grok models retain the fields for compatibility.
+func grokModelRejectsLogprobs(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if slash := strings.LastIndex(model, "/"); slash >= 0 {
+		model = strings.TrimSpace(model[slash+1:])
+	}
+	return strings.HasPrefix(model, "grok-4.20")
+}
+
 func sanitizeGrokResponsesModelCapabilities(body []byte, upstreamModel string) ([]byte, error) {
 	if !grokModelRejectsReasoningEffort(upstreamModel) {
 		return body, nil
@@ -566,6 +626,99 @@ func grokModelRejectsReasoningEffort(model string) bool {
 	}
 	switch model {
 	case "grok-composer", "grok-composer-2.5-fast", "composer-2.5":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeGrokResponsesReasoningEffort(body []byte, upstreamModel string) ([]byte, error) {
+	supportsEffort := grokSupportsReasoningEffort(upstreamModel)
+	out := body
+	var err error
+	for _, field := range []string{"reasoning.effort", "reasoning_effort"} {
+		value := gjson.GetBytes(out, field)
+		if !value.Exists() {
+			continue
+		}
+		normalized, keep := normalizeGrokReasoningEffortValue(value.String())
+		if !supportsEffort || !keep {
+			out, err = sjson.DeleteBytes(out, field)
+		} else {
+			out, err = sjson.SetBytes(out, field, normalized)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("normalize Grok reasoning field %s: %w", field, err)
+		}
+	}
+	if camel := gjson.GetBytes(out, "reasoningEffort"); camel.Exists() {
+		normalized, keep := normalizeGrokReasoningEffortValue(camel.String())
+		out, err = sjson.DeleteBytes(out, "reasoningEffort")
+		if err != nil {
+			return nil, fmt.Errorf("remove Grok reasoningEffort: %w", err)
+		}
+		if supportsEffort && keep && !gjson.GetBytes(out, "reasoning_effort").Exists() {
+			out, err = sjson.SetBytes(out, "reasoning_effort", normalized)
+			if err != nil {
+				return nil, fmt.Errorf("set Grok reasoning_effort: %w", err)
+			}
+		}
+	}
+	if reasoning := gjson.GetBytes(out, "reasoning"); reasoning.Exists() && reasoning.IsObject() && len(reasoning.Map()) == 0 {
+		out, err = sjson.DeleteBytes(out, "reasoning")
+		if err != nil {
+			return nil, fmt.Errorf("remove empty Grok reasoning: %w", err)
+		}
+	}
+	return out, nil
+}
+
+func normalizeGrokChatReasoningEffort(body []byte, upstreamModel string) ([]byte, error) {
+	raw := strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
+	if raw == "" {
+		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoningEffort").String())
+	}
+	normalized, keep := normalizeGrokReasoningEffortValue(raw)
+	keep = keep && grokSupportsReasoningEffort(upstreamModel)
+	out := body
+	var err error
+	if gjson.GetBytes(out, "reasoningEffort").Exists() {
+		out, err = sjson.DeleteBytes(out, "reasoningEffort")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !keep {
+		if gjson.GetBytes(out, "reasoning_effort").Exists() {
+			out, err = sjson.DeleteBytes(out, "reasoning_effort")
+		}
+		return out, err
+	}
+	out, err = sjson.SetBytes(out, "reasoning_effort", normalized)
+	return out, err
+}
+
+func normalizeGrokReasoningEffortValue(raw string) (string, bool) {
+	value := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(raw)))
+	switch value {
+	case "none", "low", "medium", "high":
+		return value, true
+	case "minimal":
+		return "low", true
+	case "xhigh", "extrahigh", "max", "ultra":
+		return "high", true
+	default:
+		return "", false
+	}
+}
+
+func grokSupportsReasoningEffort(model string) bool {
+	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
+	switch model {
+	case xai.DefaultTextModel, "grok-4.5-latest", "grok-4.6", "grok-4.6-latest",
+		"grok-4.3", "grok-4.3-latest",
+		"grok-3-mini", "grok-3-mini-fast", "grok-4.20-0309-reasoning",
+		"grok-4.20-reasoning", "grok-4.20-multi-agent-0309":
 		return true
 	default:
 		return false
@@ -757,15 +910,30 @@ func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 
 	rawTools := tools.Array()
 	filteredTools := make([]json.RawMessage, 0, len(rawTools))
+	toolsChanged := false
 	for _, tool := range rawTools {
 		toolType := strings.TrimSpace(tool.Get("type").String())
 		if _, ok := grokResponsesSupportedToolTypes[toolType]; ok {
-			filteredTools = append(filteredTools, json.RawMessage(tool.Raw))
+			raw := json.RawMessage(tool.Raw)
+			if toolType == "function" && (!tool.Get("parameters").Exists() || tool.Get("parameters").Type == gjson.Null) {
+				var payload map[string]any
+				if err := json.Unmarshal(raw, &payload); err != nil {
+					return nil, err
+				}
+				payload["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
+				encoded, err := json.Marshal(payload)
+				if err != nil {
+					return nil, err
+				}
+				raw = encoded
+				toolsChanged = true
+			}
+			filteredTools = append(filteredTools, raw)
 		}
 	}
 
 	var err error
-	if len(filteredTools) != len(rawTools) {
+	if len(filteredTools) != len(rawTools) || toolsChanged {
 		if len(filteredTools) == 0 {
 			body, err = sjson.DeleteBytes(body, "tools")
 		} else {
@@ -973,7 +1141,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	// Image-description probes are auxiliary requests, not conversation turns.
 	// Do not bind them to the caller's Grok prompt-cache identity.
-	upstreamReq, err := buildGrokResponsesRequest(upstreamCtx, c, account, body, token, "", s.cfg)
+	upstreamReq, err := buildGrokResponsesRequest(upstreamCtx, c, account, body, token, "", s.cfg, s.settingService)
 	releaseUpstreamCtx()
 	if err != nil {
 		return "", OpenAIUsage{}, fmt.Errorf("build grok composer image bridge request: %w", err)
@@ -1009,7 +1177,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			Kind:               kind,
 			Message:            upstreamMsg,
 		})
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, grokComposerImageBridgeVisionModel), account, resp.StatusCode, resp.Header, respBody)
 		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return "", OpenAIUsage{}, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
@@ -1021,7 +1189,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		return "", OpenAIUsage{}, fmt.Errorf("grok composer image bridge upstream error: %s", upstreamMsg)
 	}
 
-	s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
+	s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, grokComposerImageBridgeVisionModel), account, resp.Header, resp.StatusCode)
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 	if err != nil {
 		return "", OpenAIUsage{}, fmt.Errorf("read grok composer image bridge response: %w", err)
@@ -1143,8 +1311,8 @@ func addOpenAIUsage(dst *OpenAIUsage, usage OpenAIUsage) {
 	dst.ImageOutputTokens += usage.ImageOutputTokens
 }
 
-func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, cacheIdentity string, cfg *config.Config) (*http.Request, error) {
-	targetURL, err := buildGrokResponsesURL(account, cfg)
+func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, cacheIdentity string, cfg *config.Config, settings ...*SettingService) (*http.Request, error) {
+	targetURL, err := buildGrokResponsesURL(account, cfg, settings...)
 	if err != nil {
 		return nil, err
 	}
@@ -1172,12 +1340,18 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 
 // applyGrokCLIHeaders identifies subscription traffic as a supported Grok CLI
 // version. The CLI gateway rejects otherwise valid OAuth requests without it.
+// Identity pins come from package xai so service-layer headers match the final
+// transport rewrite on cli-chat-proxy.grok.com.
 func applyGrokCLIHeaders(headers http.Header) {
 	if headers == nil {
 		return
 	}
-	headers.Set("User-Agent", grokUpstreamUserAgent)
-	headers.Set("X-Grok-Client-Version", grokCLIVersion)
+	version := xai.ResolveCLIVersion()
+	headers.Set("User-Agent", xai.CLIUserAgent(version))
+	headers.Set("X-Grok-Client-Version", version)
+	headers.Set("x-grok-client-version", version)
+	headers.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
+	// Historical mode value expected by some unit tests / older CLI probes.
 	headers.Set("X-Grok-Client-Mode", "interactive")
 }
 
@@ -1200,23 +1374,36 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, acco
 		}
 	}
 
+	updates := map[string]any{
+		grokQuotaSnapshotExtraKey: snapshot,
+	}
+	// Also derive the scheduling-threshold extras (grok_sched_*) the evaluator
+	// reads in grokThresholdCandidates. Without this writer the admin-configured
+	// Grok auto-pause threshold could never fire (the read side was dead config).
+	for k, v := range buildGrokSchedulerExtraUpdates(snapshot) {
+		updates[k] = v
+	}
 	stateCtx := ctx
 	if hasActiveLimit {
 		var cancel context.CancelFunc
 		stateCtx, cancel = openAIAccountStateContext(ctx)
 		defer cancel()
 	}
-	if s.accountRepo != nil {
-		_ = s.accountRepo.UpdateExtra(stateCtx, accountID, map[string]any{
-			grokQuotaSnapshotExtraKey: snapshot,
-		})
+	// Account pointers on the request path are per-request copies (Redis/DB decode),
+	// not a shared in-process cache. Mutating Extra here matches token refresh /
+	// rate-limit writers; do not reuse the same *Account across goroutines.
+	if account.Extra == nil {
+		account.Extra = map[string]any{}
 	}
-	// Error responses are reconciled by handleGrokAccountUpstreamError, which
-	// also installs the immediate in-memory scheduling block. Successful
-	// responses can still consume the last available request/token, so persist
-	// that exhausted window here as a real rate limit rather than relying only
-	// on the passive snapshot scheduler check.
-	if hasActiveLimit {
+	account.Extra[grokQuotaSnapshotExtraKey] = snapshot
+	if s.accountRepo != nil {
+		_ = s.accountRepo.UpdateExtra(stateCtx, accountID, updates)
+	}
+	// Error responses are reconciled by handleGrokAccountUpstreamError. Pool-mode
+	// API keys retain the snapshot for observability but leave account health to
+	// the upstream pool. Other accounts install the immediate runtime and durable
+	// rate-limit state when the observed window is exhausted.
+	if hasActiveLimit && !account.IsPoolMode() {
 		s.rateLimitGrok(stateCtx, account, resetAt)
 	} else if recovery {
 		clearGrokRateLimitAfterRecovery(stateCtx, s.accountRepo, account)
@@ -1226,6 +1413,7 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, acco
 func (s *OpenAIGatewayService) updateGrokUsageFromResponse(ctx context.Context, account *Account, headers http.Header, statusCode int) {
 	snapshot := parseGrokQuotaSnapshot(headers, statusCode, time.Now())
 	if snapshot != nil {
+		stampGrokQuotaSnapshotForPlan(account, snapshot, grokRequestedModelFromCtx(ctx))
 		s.updateGrokUsageSnapshot(ctx, account, snapshot)
 		return
 	}
@@ -1419,7 +1607,8 @@ func (s *OpenAIGatewayService) rateLimitGrok(ctx context.Context, account *Accou
 	if s == nil || account == nil {
 		return
 	}
-	resetAt = normalizeGrokRateLimitResetAt(account, resetAt, time.Now())
+	now := time.Now()
+	resetAt = normalizeGrokRateLimitResetAt(account, resetAt, now)
 
 	runtimeUntil := resetAt
 	if account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(runtimeUntil) {
@@ -1427,6 +1616,135 @@ func (s *OpenAIGatewayService) rateLimitGrok(ctx context.Context, account *Accou
 	}
 	s.BlockAccountScheduling(account, runtimeUntil, "429")
 	persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
+
+	// Propagate a short team+model cool so sibling OAuth accounts on the same
+	// xAI team skip the hot model without waiting for each to hit 429 alone.
+	// Model is taken from the latest request context when available; empty is a
+	// no-op inside markGrokTeamModelRateLimit.
+	if model, _ := ctx.Value(grokTeamRateLimitModelContextKey{}).(string); model != "" {
+		markGrokTeamModelRateLimit(account, model, resolveGrokTeamRateLimitUntil(resetAt, now))
+	}
+}
+
+// buildGrokSchedulerExtraUpdates derives the grok_sched_* scheduling snapshot
+// (utilization percent + reset time) consumed by EvaluateAccountSchedulingThreshold.
+// Utilization is the most-constrained of the requests/tokens windows.
+func buildGrokSchedulerExtraUpdates(snapshot *xai.QuotaSnapshot) map[string]any {
+	if snapshot == nil {
+		return nil
+	}
+	util, reset, ok := grokSnapshotUtilization(snapshot)
+	if !ok {
+		return nil
+	}
+	updates := map[string]any{
+		"grok_sched_utilization":      util,
+		"grok_sched_usage_updated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if reset != nil {
+		// 防御：调度阈值暂停时长由 grok_sched_reset_at 决定。若上游返回脏的
+		// reset 头（例如把相对毫秒 "6000" 误当相对秒解析出 ~33h 的未来时刻），
+		// 不设上限会把耗尽账号长时间锁死。xAI 配额窗口不会超过一天，因此对
+		// 未来时刻做 grokMaxSchedulingResetHorizon 钳制；过去/无效值直接不写。
+		now := time.Now()
+		if reset.After(now) {
+			capped := *reset
+			if horizon := now.Add(grokMaxSchedulingResetHorizon); capped.After(horizon) {
+				capped = horizon
+			}
+			updates["grok_sched_reset_at"] = capped.UTC().Format(time.RFC3339)
+		}
+	}
+	return updates
+}
+
+// grokSnapshotUtilization returns the highest window utilization (0-100) across
+// the requests/tokens quota windows and the reset time of that window.
+func grokSnapshotUtilization(snapshot *xai.QuotaSnapshot) (float64, *time.Time, bool) {
+	if snapshot == nil {
+		return 0, nil, false
+	}
+	best := -1.0
+	var bestReset *time.Time
+	consider := func(window *xai.QuotaWindow) {
+		if window == nil || window.Limit == nil || *window.Limit <= 0 || window.Remaining == nil {
+			return
+		}
+		remaining := *window.Remaining
+		if remaining < 0 {
+			remaining = 0
+		}
+		util := (1 - float64(remaining)/float64(*window.Limit)) * 100
+		if util < 0 {
+			util = 0
+		}
+		if util > 100 {
+			util = 100
+		}
+		if util > best {
+			best = util
+			if window.ResetUnix != nil {
+				t := time.Unix(*window.ResetUnix, 0).UTC()
+				bestReset = &t
+			} else {
+				bestReset = nil
+			}
+		}
+	}
+	consider(snapshot.Requests)
+	consider(snapshot.Tokens)
+	if best < 0 {
+		return 0, nil, false
+	}
+	return best, bestReset, true
+}
+
+// grokMaxSchedulingResetHorizon bounds how far into the future a Grok
+// scheduling-threshold pause (grok_sched_reset_at) may be set, so a malformed
+// upstream reset header can't park an over-threshold account for days. xAI quota
+// windows do not exceed ~a day.
+const grokMaxSchedulingResetHorizon = 25 * time.Hour
+
+// grokTeamRateLimitModelContextKey carries the upstream model for team cools.
+type grokTeamRateLimitModelContextKey struct{}
+
+// withGrokTeamRateLimitModel attaches the upstream model name for rate-limit
+// side effects (team+model cool). Safe when model is empty.
+func withGrokTeamRateLimitModel(ctx context.Context, model string) context.Context {
+	model = strings.TrimSpace(model)
+	if model == "" || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, grokTeamRateLimitModelContextKey{}, model)
+}
+
+func grokRequestedModelFromCtx(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	model, _ := ctx.Value(grokTeamRateLimitModelContextKey{}).(string)
+	return strings.TrimSpace(model)
+}
+
+func isGrokHeavyTransientModel(requestedModel string) bool {
+	model := strings.ToLower(strings.TrimSpace(xai.ResolveGrokTextResponsesModelID(requestedModel)))
+	return strings.Contains(model, "multi-agent")
+}
+
+func persistGrokTransientModelCooldown(account *Account, decision GrokUpstreamFailureDecision) bool {
+	if account == nil {
+		return false
+	}
+	model := strings.TrimSpace(decision.Model)
+	if model == "" || !isGrokHeavyTransientModel(model) {
+		return false
+	}
+	cooldown := decision.Cooldown
+	if cooldown <= 0 {
+		cooldown = 3 * time.Minute
+	}
+	markGrokModelTransientBlock(account.ID, model, time.Now().Add(cooldown))
+	return true
 }
 
 func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) {
@@ -1437,18 +1755,18 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		return
 	}
 	now := time.Now()
-	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
+	snapshot := parseGrokQuotaSnapshot(headers, statusCode, now)
+	stampGrokQuotaSnapshotForPlan(account, snapshot, grokRequestedModelFromCtx(ctx))
+	s.updateGrokUsageSnapshot(ctx, account, snapshot)
+
+	if statusCode == http.StatusForbidden && s.applyGrokForbiddenPolicy(ctx, account, responseBody) {
+		return
+	}
 	switch statusCode {
-	case http.StatusForbidden:
-		// 上游: 管理员配置的 403 规则可做模型级/时长隔离；命中则直接返回。
-		if s.applyGrokForbiddenPolicy(ctx, account, responseBody) {
-			return
-		}
-		// 定制: 未命中规则的 403 直接置 error（不用 30m 临时不可调度）。
-		s.setGrokAccountError(ctx, account, statusCode, responseBody)
 	case http.StatusTooManyRequests:
 		// updateGrokUsageSnapshot installs both runtime and durable rate-limit state.
 		if isGrokFreeUsageExhausted(responseBody) {
+			// 定制:grok 免费额度耗尽封禁 24h,并把耗尽时间写进 account extra。
 			resetAt := now.Add(grokFreeUsageWindow)
 			stateCtx, cancel := openAIAccountStateContext(ctx)
 			defer cancel()
@@ -1458,13 +1776,14 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 				})
 			}
 			s.rateLimitGrok(stateCtx, account, resetAt)
-		} else if !grokSnapshotHasExplicitRateLimitReset(parseGrokQuotaSnapshot(headers, statusCode, now), now) {
+		} else if !grokSnapshotHasExplicitRateLimitReset(snapshot, now) {
 			// 无任何恢复时间信息的 429:2 分钟兜底会让配额未恢复的账号反复
 			// 进出调度池,这里按连击做指数递增封禁并记录原始 body。
 			s.escalateGrokBare429(ctx, account, responseBody, now)
 		}
 	default:
-		// 定制: Grok 请求非 429 错误直接置 error，不再进入临时不可调度。
+		// 定制: Grok 请求非 429 错误直接置 error，不再进入临时不可调度
+		// (上游对 401/402/403/5xx 的临时不可调度冷却分支不采纳,也不区分 pool mode)。
 		if statusCode >= 400 {
 			s.setGrokAccountError(ctx, account, statusCode, responseBody)
 		}
@@ -1499,6 +1818,27 @@ func isGrokFreeUsageExhausted(body []byte) bool {
 	}
 	return strings.Contains(text, "used all the included free usage") &&
 		strings.Contains(text, "rolling 24-hour window")
+}
+
+// isGrokSpendingLimitError detects xAI billing exhaustion bodies (often 403, sometimes 402).
+func isGrokSpendingLimitError(responseBody []byte) bool {
+	if len(responseBody) == 0 {
+		return false
+	}
+	code := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		gjson.GetBytes(responseBody, "code").String(),
+		gjson.GetBytes(responseBody, "error.code").String(),
+	)))
+	if code == "personal-team-blocked:spending-limit" {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		gjson.GetBytes(responseBody, "error").String(),
+		gjson.GetBytes(responseBody, "error.message").String(),
+		gjson.GetBytes(responseBody, "message").String(),
+	)))
+	return strings.Contains(message, "spending limit") ||
+		strings.Contains(message, "run out of credits")
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {

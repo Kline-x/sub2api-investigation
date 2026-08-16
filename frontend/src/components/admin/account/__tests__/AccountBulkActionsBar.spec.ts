@@ -23,7 +23,6 @@ describe('AccountBulkActionsBar filtered selection', () => {
     await button.trigger('click')
     expect(wrapper.emitted('select-filtered')).toHaveLength(1)
   })
-})
 
   it('edits only selected accounts when selection is non-empty', async () => {
     const wrapper = mount(AccountBulkActionsBar, {
@@ -63,3 +62,24 @@ describe('AccountBulkActionsBar filtered selection', () => {
     await editFiltered!.trigger('click')
     expect(wrapper.emitted('edit-filtered')).toHaveLength(1)
   })
+
+  it('preserves the upstream billing probe action from v0.1.166', async () => {
+    const wrapper = mount(AccountBulkActionsBar, {
+      props: {
+        selectedIds: [1],
+        filteredTotal: 45,
+        allVisibleSelected: false,
+        allFilteredSelected: false,
+        selectingAll: false
+      }
+    })
+
+    const button = wrapper.findAll('button').find((item) =>
+      item.text().includes('admin.accounts.bulkActions.probeUpstreamBilling')
+    )
+
+    expect(button).toBeDefined()
+    await button!.trigger('click')
+    expect(wrapper.emitted('probe-upstream-billing')).toHaveLength(1)
+  })
+})

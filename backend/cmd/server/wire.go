@@ -55,6 +55,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		// Cleanup function provider
 		provideCleanup,
 
+		// 定制:账号巡检记录仓储的接口绑定(组合根,避免 repository→service 循环依赖)
+		wire.Bind(new(service.AccountPatrolRecordStore), new(*repository.AccountPatrolRecordRepository)),
+
 		// Application struct
 		wire.Struct(new(Application), "Server", "PromptAudit", "Cleanup"),
 	)
@@ -88,6 +91,7 @@ func provideCleanup(
 	schedulerSnapshot *service.SchedulerSnapshotService,
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
+	codexVersionSync *service.OpenAICodexVersionSyncService,
 	proxyExpiry *service.ProxyExpiryService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
@@ -109,6 +113,7 @@ func provideCleanup(
 	backupSvc *service.BackupService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
+	channelMonitorV2Aggregator *service.ChannelMonitorV2Aggregator,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	accountPatrol *service.AccountPatrolService,
@@ -237,6 +242,10 @@ func provideCleanup(
 				accountExpiry.Stop()
 				return nil
 			}},
+			{"OpenAICodexVersionSyncService", func() error {
+				codexVersionSync.Stop()
+				return nil
+			}},
 			{"ProxyExpiryService", func() error {
 				proxyExpiry.Stop()
 				return nil
@@ -315,7 +324,13 @@ func provideCleanup(
 				}
 				return nil
 			}},
-			{"ChannelMonitorRunner", func() error {
+			{"ChannelMonitorV2Aggregator", func() error {
+			if channelMonitorV2Aggregator != nil {
+				channelMonitorV2Aggregator.Stop()
+			}
+			return nil
+		}},
+		{"ChannelMonitorRunner", func() error {
 				if channelMonitorRunner != nil {
 					channelMonitorRunner.Stop()
 				}
