@@ -95,6 +95,13 @@ func TestForwardBaseURLs_Daily优先(t *testing.T) {
 		t.Fatal("ForwardBaseURLs 返回空列表")
 	}
 
+	// daily 端点必须与官方客户端一致（防止回退到已废弃的 sandbox 主机名）
+	// 见上游 PR #5625 / issue #5611：g1-pro-tier 账号只有走 daily 端点才不被 429
+	const officialDailyBaseURL = "https://daily-cloudcode-pa.googleapis.com"
+	if antigravityDailyBaseURL != officialDailyBaseURL {
+		t.Errorf("daily 端点与官方客户端不一致: got %s, want %s", antigravityDailyBaseURL, officialDailyBaseURL)
+	}
+
 	// daily URL 应排在第一位
 	if urls[0] != antigravityDailyBaseURL {
 		t.Errorf("第一个 URL 应为 daily: got %s, want %s", urls[0], antigravityDailyBaseURL)

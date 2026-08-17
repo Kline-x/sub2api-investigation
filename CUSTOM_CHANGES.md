@@ -17,6 +17,27 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.177-custom.2（2026-08-17）
+
+Antigravity daily 端点对齐官方客户端：`antigravityDailyBaseURL` 由已废弃的
+`https://daily-cloudcode-pa.sandbox.googleapis.com` 改为 `https://daily-cloudcode-pa.googleapis.com`
+（`backend/internal/pkg/antigravity/oauth.go`）。
+
+- **动因**：上游 issue #5611——持有 Google AI Pro（g1-pro-tier）的 Antigravity 账号打生产端点
+  `cloudcode-pa.googleapis.com` **必定 429**（账号档位级拒绝，与请求内容无关），官方 Antigravity IDE
+  实际把推理请求发到 daily 端点。上游 PR #5625 提了同样的一行修改，但**截至本次发布仍是 open 未合并**，
+  故先在定制分支落地。
+- **影响面**：该常量同时是 `BaseURLs[1]`（`GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=daily|sandbox` 时
+  `resolveAntigravityForwardBaseURL` 取的就是它）和 `client.go` 的 `privacyBaseURL`（隐私设置 API）。
+  隐私 API 此前 URL 走 sandbox 主机、`req.Host` 却写死官方 daily 主机，本次改完两者一致。
+- **不改变默认行为**：网关转发默认仍走 prod（`BaseURLs[0]`），daily 端点需显式设
+  `GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=daily` 才启用——值必须是关键字 `daily`/`sandbox`，
+  填完整 URL 会静默回落到 prod（issue #5611 评论区踩过）。
+- **护栏**：`oauth_test.go` 的 `TestForwardBaseURLs_Daily优先` 增加字面量断言，防止合并上游时被带回 sandbox 主机名。
+- **已知副作用**（来自 issue 评论，非本次改动引入）：daily 端点下弃用别名 `gemini-3.1-pro-high` 返回 400，
+  需在账号 model_mapping 里改映射到 `gemini-pro-agent`。开启 daily 后无 prod 兜底
+  （`antigravity_gateway_retry.go` 的 `availableURLs` 只有一个元素），且是全局开关、非按账号。
+
 ## v0.1.177-custom.1（2026-08-16，main）
 
 合并上游 tag `v0.1.177` 到 `main`（上一基线 `v0.1.168`，中间跨 169–176，共 447 个非合并提交）。冲突处理要点：
@@ -299,6 +320,7 @@ Antigravity 走的是独立的 `internal/pkg/antigravity` 包（用 `map[string]
 | **Anthropic thinking 块恒带 `signature`**（官方格式 `{"type":"thinking","thinking":"","signature":""}`） | `pkg/antigravity/stream_transformer.go`(2 处)、`pkg/antigravity/claude_types.go`(`ClaudeContentItem.MarshalJSON`)、`pkg/apicompat/types.go`(`AnthropicContentBlock` thinking 分支)<br>⚠ 上游 `TestStreamingReasoning` 断言已改为含 signature |
 | **测试连接模型下拉用账号 `model_mapping`**（Antigravity 分支原本无条件返回硬编码 DefaultModels） | `handler/admin/account_handler.go`（`GetAvailableModels` 的 Antigravity 分支） |
 | **不要补发 `response.in_progress`**（试过更糟，见上文 v0.1.168-custom.2 条目） | `pkg/apicompat/anthropic_to_responses_response.go`、`chatcompletions_responses_bridge.go` 的注释 |
+| **Antigravity daily 端点用官方主机名**（`daily-cloudcode-pa.googleapis.com`，非 `.sandbox.`）<br>上游 PR #5625 同款改动但未合并，合并上游时**必查是否被带回 sandbox** | `pkg/antigravity/oauth.go`（`antigravityDailyBaseURL`）<br>护栏：`pkg/antigravity/oauth_test.go` 的 `TestForwardBaseURLs_Daily优先` 字面量断言 |
 
 ### ss 出站代理：合并上游必查清单
 
