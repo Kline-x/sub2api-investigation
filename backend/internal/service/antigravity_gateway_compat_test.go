@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -614,4 +615,98 @@ func TestAntigravityCompatKeepaliveAfterFirstEvent(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), ": ping\n\n")
 	require.Contains(t, recorder.Header().Get("Content-Type"), "text/event-stream")
 	require.NoError(t, reader.Close())
+}
+
+// 定制：Antigravity 的 v1internal 端点不支持「内置工具 + 函数调用」共存，混用一律 400
+// （"Please enable tool_config.include_server_side_tool_invocations..."，且该开关在此端点
+// 不生效——2026-08-17 实测 12 种写法均无效）。故混用时丢内置搜索、保函数工具。
+//
+// 范围很关键：共用转换器 convertClaudeMessagesToGeminiGenerateContent 也服务
+// Gemini/AI Studio 平台，那边混用合法，所以丢弃逻辑只放在 Antigravity 链路。
+func TestDropAntigravityBuiltinToolsWhenFunctionsPresent(t *testing.T) {
+	cases := []struct {
+		name           string
+		body           string
+		wantGoogle     bool
+		wantFuncsCount int
+	}{
+		{
+			name:           "混用：丢搜索保函数",
+			body:           `{"tools":[{"functionDeclarations":[{"name":"shell"}]},{"googleSearch":{}}]}`,
+			wantGoogle:     false,
+			wantFuncsCount: 1,
+		},
+		{
+			name:           "顺序颠倒同样处理",
+			body:           `{"tools":[{"googleSearch":{}},{"functionDeclarations":[{"name":"shell"}]}]}`,
+			wantGoogle:     false,
+			wantFuncsCount: 1,
+		},
+		{
+			name:           "同一个 tool 对象内混用：只摘掉搜索键",
+			body:           `{"tools":[{"functionDeclarations":[{"name":"shell"}],"googleSearch":{}}]}`,
+			wantGoogle:     false,
+			wantFuncsCount: 1,
+		},
+		{
+			name:           "snake_case 的 google_search 同样处理",
+			body:           `{"tools":[{"functionDeclarations":[{"name":"shell"}]},{"google_search":{}}]}`,
+			wantGoogle:     false,
+			wantFuncsCount: 1,
+		},
+		{
+			name:           "只有内置搜索：原样保留",
+			body:           `{"tools":[{"googleSearch":{}}]}`,
+			wantGoogle:     true,
+			wantFuncsCount: 0,
+		},
+		{
+			name:           "只有函数工具：不受影响",
+			body:           `{"tools":[{"functionDeclarations":[{"name":"shell"}]}]}`,
+			wantGoogle:     false,
+			wantFuncsCount: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := dropAntigravityBuiltinToolsWhenFunctionsPresent([]byte(tc.body))
+
+			var payload map[string]any
+			if err := json.Unmarshal(out, &payload); err != nil {
+				t.Fatalf("结果不是合法 JSON: %v", err)
+			}
+
+			var gotGoogle, gotFuncs int
+			tools, _ := payload["tools"].([]any)
+			for _, raw := range tools {
+				tool, _ := raw.(map[string]any)
+				if _, ok := tool["googleSearch"]; ok {
+					gotGoogle++
+				}
+				if _, ok := tool["google_search"]; ok {
+					gotGoogle++
+				}
+				if decls, ok := tool["functionDeclarations"].([]any); ok {
+					gotFuncs += len(decls)
+				}
+			}
+
+			if (gotGoogle > 0) != tc.wantGoogle {
+				t.Fatalf("内置搜索 期望存在=%v，实际 %d 个，结果: %s", tc.wantGoogle, gotGoogle, string(out))
+			}
+			if gotFuncs != tc.wantFuncsCount {
+				t.Fatalf("函数声明数期望 %d，实际 %d，结果: %s", tc.wantFuncsCount, gotFuncs, string(out))
+			}
+		})
+	}
+}
+
+// 非法 JSON / 无 tools 时原样返回，不吞请求
+func TestDropAntigravityBuiltinTools_边界情况原样返回(t *testing.T) {
+	for _, body := range []string{`not json`, `{}`, `{"tools":[]}`, `{"contents":[]}`} {
+		if got := string(dropAntigravityBuiltinToolsWhenFunctionsPresent([]byte(body))); got != body {
+			t.Fatalf("输入 %q 应原样返回，实际 %q", body, got)
+		}
+	}
 }

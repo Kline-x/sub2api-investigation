@@ -263,27 +263,78 @@ func TestBuildTools_CustomTypeTools(t *testing.T) {
 	}
 }
 
-func TestBuildTools_PreservesWebSearchAlongsideFunctions(t *testing.T) {
-	tools := []ClaudeTool{
-		{
-			Name:        "get_weather",
-			Description: "Get weather information",
-			InputSchema: map[string]any{"type": "object"},
-		},
-		{
-			Type: "web_search_20250305",
-			Name: "web_search",
+// 【定制，与上游断言相反】上游这条测试原本断言 web_search 与函数工具**并存**
+// （TestBuildTools_PreservesWebSearchAlongsideFunctions）。但上游 v1internal 端点对
+// 「内置工具 + 函数调用」混用一律 400 INVALID_ARGUMENT：
+//
+//	Please enable tool_config.include_server_side_tool_invocations
+//	to use Built-in tools with Function calling.
+//
+// 而那个开关在该端点上不生效（2026-08-17 实测：字段在 schema 里、TYPE_BOOL、值确实送达，
+// 但 camel/snake 拼写、合并成单个 tool 对象、functionCallingConfig 的四种 mode 全部照旧 400，
+// 3.6 / 3.7 表现一致）。因此定制为：混用时丢内置搜索、保函数工具。
+//
+// 合并上游时若看到这条测试被改回「并存」，说明定制被覆盖——先复测上游行为再决定。
+func TestBuildTools_混用时丢弃内置搜索保留函数工具(t *testing.T) {
+	funcTool := ClaudeTool{
+		Name:        "get_weather",
+		Description: "Get weather information",
+		InputSchema: map[string]any{"type": "object"},
+	}
+	searchTool := ClaudeTool{Type: "web_search_20250305", Name: "web_search"}
+
+	// 混用：只剩函数工具
+	mixed := buildTools([]ClaudeTool{funcTool, searchTool})
+	require.Len(t, mixed, 1)
+	require.Len(t, mixed[0].FunctionDeclarations, 1)
+	require.Equal(t, "get_weather", mixed[0].FunctionDeclarations[0].Name)
+	require.Nil(t, mixed[0].GoogleSearch)
+
+	// 单独使用内置搜索：保持原样（含 enhancedContent）
+	searchOnly := buildTools([]ClaudeTool{searchTool})
+	require.Len(t, searchOnly, 1)
+	require.NotNil(t, searchOnly[0].GoogleSearch)
+	require.NotNil(t, searchOnly[0].GoogleSearch.EnhancedContent)
+	require.NotNil(t, searchOnly[0].GoogleSearch.EnhancedContent.ImageSearch)
+	require.Equal(t, 5, searchOnly[0].GoogleSearch.EnhancedContent.ImageSearch.MaxResultCount)
+}
+
+// 混用时不应把请求当成 web_search 类型：既不切 requestType，也不把模型降级到
+// gemini-2.5-flash（webSearchFallbackModel）——否则 Codex 会话会被悄悄换成另一个模型。
+func TestTransform_混用工具时不降级模型也不切requestType(t *testing.T) {
+	req := &ClaudeRequest{
+		Model:     "gemini-3.7-flash-tiered",
+		MaxTokens: 32,
+		Messages:  []ClaudeMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+		Tools: []ClaudeTool{
+			{Name: "shell", Description: "run", InputSchema: map[string]any{"type": "object"}},
+			{Type: "web_search", Name: "web_search"},
 		},
 	}
 
-	result := buildTools(tools)
-	require.Len(t, result, 2)
-	require.Len(t, result[0].FunctionDeclarations, 1)
-	require.Equal(t, "get_weather", result[0].FunctionDeclarations[0].Name)
-	require.NotNil(t, result[1].GoogleSearch)
-	require.NotNil(t, result[1].GoogleSearch.EnhancedContent)
-	require.NotNil(t, result[1].GoogleSearch.EnhancedContent.ImageSearch)
-	require.Equal(t, 5, result[1].GoogleSearch.EnhancedContent.ImageSearch.MaxResultCount)
+	raw, err := TransformClaudeToGemini(req, "proj", "gemini-3.7-flash-tiered")
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	require.Equal(t, "agent", payload["requestType"])
+	require.Equal(t, "gemini-3.7-flash-tiered", payload["model"])
+	require.NotContains(t, string(raw), "googleSearch")
+
+	// 单独用 web_search 时仍走 web_search 请求类型与降级模型（保持上游行为）
+	searchOnly := &ClaudeRequest{
+		Model:     "gemini-3.7-flash-tiered",
+		MaxTokens: 32,
+		Messages:  []ClaudeMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+		Tools:     []ClaudeTool{{Type: "web_search", Name: "web_search"}},
+	}
+	rawSearch, err := TransformClaudeToGemini(searchOnly, "proj", "gemini-3.7-flash-tiered")
+	require.NoError(t, err)
+
+	var searchPayload map[string]any
+	require.NoError(t, json.Unmarshal(rawSearch, &searchPayload))
+	require.Equal(t, "web_search", searchPayload["requestType"])
+	require.Equal(t, webSearchFallbackModel, searchPayload["model"])
 }
 
 func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
@@ -533,7 +584,9 @@ func TestTransformClaudeToGeminiWithOptions_MessageRoles(t *testing.T) {
 	})
 }
 
-func TestTransformClaudeToGeminiWithOptions_PreservesWebSearchAlongsideFunctions(t *testing.T) {
+// 【定制，与上游断言相反】上游原断言 web_search 与函数工具并存（见同名 Preserves… 测试的说明）。
+// 上游 v1internal 端点不支持这种混用，一律 400，故改为「丢内置搜索、保函数工具」。
+func TestTransformClaudeToGeminiWithOptions_混用时丢弃内置搜索(t *testing.T) {
 	claudeReq := &ClaudeRequest{
 		Model: "claude-3-5-sonnet-latest",
 		Messages: []ClaudeMessage{
@@ -560,8 +613,8 @@ func TestTransformClaudeToGeminiWithOptions_PreservesWebSearchAlongsideFunctions
 
 	var req V1InternalRequest
 	require.NoError(t, json.Unmarshal(body, &req))
-	require.Len(t, req.Request.Tools, 2)
+	require.Len(t, req.Request.Tools, 1)
 	require.Len(t, req.Request.Tools[0].FunctionDeclarations, 1)
 	require.Equal(t, "get_weather", req.Request.Tools[0].FunctionDeclarations[0].Name)
-	require.NotNil(t, req.Request.Tools[1].GoogleSearch)
+	require.Nil(t, req.Request.Tools[0].GoogleSearch)
 }

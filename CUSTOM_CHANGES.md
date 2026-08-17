@@ -17,6 +17,42 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.177-custom.6（2026-08-17）
+
+**修复 Codex / CC Switch 打 Antigravity 必定 400**：内置工具（`googleSearch`）与函数工具
+（`functionDeclarations`）混用时，丢掉内置搜索、保留函数工具。
+
+- **现象**：CC Switch 经 `/responses` 打 Antigravity，`upstream_status: HTTP 400`，
+  上游原文 `Please enable tool_config.include_server_side_tool_invocations to use Built-in tools
+  with Function calling.`（端点 `/v1internal:streamGenerateContent`）。
+  触发条件是客户端同时带 `web_search` 和 `shell` 等函数工具——Codex 的常态。
+- **那个开关不能用（实测，别再试了）**：字段在 schema 里、`TYPE_BOOL`、值确实送达上游
+  （抓过真实请求体确认），但端点不认。2026-08-17 试遍 12 种写法全部照旧 400：
+  camel / snake 两种拼写、`toolConfig` 与 `tool_config`、两类工具合并进单个 tool 对象、
+  `functionCallingConfig` 的 `AUTO` / `ANY` / `NONE` / `VALIDATED`，gemini-3.6 与 3.7 一致。
+  用未知字段探测确认 `request.tool_config` 确实被上游解析（塞 `zzz` 会报 `Unknown name`）。
+- **取舍**：丢内置搜索、保函数工具。函数工具是这类客户端的命脉（shell / apply_patch），
+  丢了会话就废；服务端搜索只是锦上添花。
+- **顺带修掉的坑**：原逻辑只要请求带 `web_search` 就把 `requestType` 切成 `"web_search"`
+  并**把模型强制降级到 `gemini-2.5-flash`**。混用场景下这意味着用户以为在用 3.7、
+  实际上游跑的是 2.5-flash。现在混用按普通 agent 请求走，模型不再被偷换；
+  **纯搜索请求（不带函数工具）行为完全不变**，仍切 requestType 并降级。
+- **范围严格限定在 Antigravity**：`convertClaudeMessagesToGeminiGenerateContent` 是
+  Gemini 平台与 Antigravity 共用的转换器，**Gemini 平台上混用完全正常**——用真实 Gemini
+  账号（google_one OAuth）实测同样组合返回 200，连开关都不用带。所以丢弃逻辑放在
+  `antigravity_gateway_compat.go` 的 `dropAntigravityBuiltinToolsWhenFunctionsPresent`
+  后处理里，**绝不能塞进共用转换器**（第一版就是塞错地方，会砍掉 Gemini 平台的可用能力）。
+- **改动两处**（claude-* 与 gemini-* 走不同转换器，缺一个就还会 400）：
+  - `pkg/antigravity/request_transformer.go`：`buildTools` 混用时丢 googleSearch；
+    `hasFunctionTool` 新增；`hasWebSearchTool` 判定加 `&& !hasFunctionTool(...)`
+  - `service/antigravity_gateway_compat.go`：`dropAntigravityBuiltinToolsWhenFunctionsPresent`
+- **⚠ 与上游断言相反的测试**（合并上游必查）：上游 `TestBuildTools_PreservesWebSearchAlongsideFunctions`
+  与 `TestTransformClaudeToGeminiWithOptions_PreservesWebSearchAlongsideFunctions` 断言两者并存，
+  本仓库改为断言「丢搜索保函数」。看到被改回并存即定制被覆盖。
+- **已知副作用**：丢弃是静默的，客户端收不到提示，只有服务端日志记一行。
+- **同期发现、未修**：Gemini 平台上 `/v1/responses` 返回 401 而 `/v1/chat/completions` 正常
+  （同账号、同模型、面板「测试连接」也正常）。与本次改动无关，待单独排查。
+
 ## v0.1.177-custom.5（2026-08-17）
 
 两件事，都围绕 custom.4 补进来的 `gemini-3.7-flash-tiered`。
@@ -421,6 +457,7 @@ Antigravity 走的是独立的 `internal/pkg/antigravity` 包（用 `map[string]
 | **Antigravity 转发默认走 daily**（上游默认 prod；`GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=prod` 反向切回）<br>上游没有对应改动，合并上游时**必查默认值是否被改回 prod** | `service/antigravity_gateway_retry.go`（`resolveAntigravityForwardBaseURL`）<br>护栏：`service/antigravity_rate_limit_test.go` 的 `TestResolveAntigravityForwardBaseURL_定制默认走daily` |
 | **Antigravity Gemini 3.7 Flash**（只有 `-tiered` 变体，其余 3.7 命名上游 404）<br>上游未收录；计费按官方牌价两段式，**2027-01-01 自动切档** | `pkg/antigravity/claude_types.go`（`geminiModels`）、`domain/constants.go`（`DefaultAntigravityModelMapping`）、`service/account.go`（`ensureAntigravityDefaultPassthroughs`）、`service/billing_service.go`（`gemini37FlashPricing` + `billingNow` + 前缀分支）、`service/pricing_service.go`（`normalizeGeminiThinkingTierAlias`）<br>护栏：`claude_types_test.go` / `constants_test.go` / `pricing_service_test.go` |
 | **Antigravity 模型限制显示有效映射**（编辑账号弹窗叠加运行时默认透传，仅在已配限制时） | `handler/dto/mappers.go`（`applyAntigravityEffectiveModelMapping`）<br>护栏：`handler/dto/account_mapper_antigravity_model_mapping_test.go` |
+| **Antigravity 混用工具时丢内置搜索**（内置 googleSearch + 函数工具在 v1internal 端点必 400）<br>⚠ 两条测试与上游断言相反（上游断言两者并存）；**Gemini 平台不受影响，别把逻辑挪进共用转换器** | `pkg/antigravity/request_transformer.go`（`buildTools` / `hasFunctionTool`）、`service/antigravity_gateway_compat.go`（`dropAntigravityBuiltinToolsWhenFunctionsPresent`）<br>护栏：`request_transformer_test.go` 2 条、`antigravity_gateway_compat_test.go` 2 条 |
 
 ### ss 出站代理：合并上游必查清单
 

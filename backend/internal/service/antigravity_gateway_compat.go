@@ -12,6 +12,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -252,6 +253,105 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	}, nil
 }
 
+// dropAntigravityBuiltinToolsWhenFunctionsPresent 当请求里同时存在内置工具
+// （server-side tool，目前是 googleSearch）与函数工具（functionDeclarations）时，
+// 丢掉内置工具，只保留函数工具。
+//
+// 【为什么】Antigravity 的 v1internal 端点不支持两者共存，混用一律 400 INVALID_ARGUMENT：
+//
+//	Please enable tool_config.include_server_side_tool_invocations
+//	to use Built-in tools with Function calling.
+//
+// 而那个开关在该端点上**不生效**——2026-08-17 实测：字段在 schema 里（TYPE_BOOL）、
+// 值确实送达上游，但 camel/snake 两种拼写、把两类工具合并进单个 tool 对象、
+// functionCallingConfig 的 AUTO/ANY/NONE/VALIDATED 四种 mode，全部照旧 400，
+// gemini-3.6 与 3.7 表现一致。上游转换器在检测到 web_search 时会把 requestType 切成
+// "web_search" 并降级模型，也印证了「内置搜索是独立请求类型，不与函数调用同场」。
+//
+// 【取舍】丢内置搜索、保函数工具：函数工具是 Codex / CC Switch 这类客户端的命脉
+// （shell / apply_patch 等），丢了整个会话就废；服务端搜索只是锦上添花。
+//
+// 【范围】只作用于 Antigravity 路径。convertClaudeMessagesToGeminiGenerateContent 是
+// **Gemini 平台与 Antigravity 共用**的，而 Gemini 平台上混用完全正常——
+// 2026-08-17 用真实 Gemini 账号（google_one OAuth）实测：同样的
+// web_search + 函数工具组合走 Gemini 平台返回 200，连这个开关都不需要带。
+// 所以丢弃逻辑必须放在 Antigravity 专属链路里，塞进共用转换器会把 Gemini 平台上
+// 本来可用的混用能力一起砍掉。差异出在**端点**（cloudcode-pa 内部端点 vs 公开 Gemini API），
+// 不是模型。
+func dropAntigravityBuiltinToolsWhenFunctionsPresent(body []byte) []byte {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body
+	}
+
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		return body
+	}
+
+	hasFunctions := false
+	for _, raw := range tools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if decls, exists := tool["functionDeclarations"].([]any); exists && len(decls) > 0 {
+			hasFunctions = true
+			break
+		}
+		if decls, exists := tool["function_declarations"].([]any); exists && len(decls) > 0 {
+			hasFunctions = true
+			break
+		}
+	}
+	if !hasFunctions {
+		return body
+	}
+
+	kept := make([]any, 0, len(tools))
+	dropped := 0
+	for _, raw := range tools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			kept = append(kept, raw)
+			continue
+		}
+		_, hasGoogleSearch := tool["googleSearch"]
+		if !hasGoogleSearch {
+			_, hasGoogleSearch = tool["google_search"]
+		}
+		if !hasGoogleSearch {
+			kept = append(kept, raw)
+			continue
+		}
+		// 同一个 tool 对象里既有内置搜索又有函数声明时，只摘掉内置搜索的键
+		delete(tool, "googleSearch")
+		delete(tool, "google_search")
+		dropped++
+		if len(tool) > 0 {
+			kept = append(kept, tool)
+		}
+	}
+	if dropped == 0 {
+		return body
+	}
+
+	logger.LegacyPrintf("service.antigravity_gateway",
+		"[antigravity-compat] 内置 web_search 与函数工具混用，上游不支持，已丢弃 %d 个内置搜索工具", dropped)
+
+	if len(kept) == 0 {
+		delete(payload, "tools")
+	} else {
+		payload["tools"] = kept
+	}
+
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBody(
 	ctx context.Context,
 	claudeBody []byte,
@@ -264,6 +364,7 @@ func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBody(
 		if err != nil {
 			return nil, err
 		}
+		body = dropAntigravityBuiltinToolsWhenFunctionsPresent(body)
 		body = ensureGeminiFunctionCallThoughtSignatures(body)
 		body, err = injectIdentityPatchToGeminiRequest(body)
 		if err != nil {

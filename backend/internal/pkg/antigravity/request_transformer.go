@@ -88,8 +88,16 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 用于存储 tool_use id -> name 映射
 	toolIDToName := make(map[string]string)
 
-	// 检测是否有 web_search 工具
-	hasWebSearchTool := hasWebSearchTool(claudeReq.Tools)
+	// 检测是否有 web_search 工具。
+	//
+	// 【定制】与函数工具混用时按普通 agent 请求处理：不切 requestType、不降级模型，
+	// 且 buildTools 会丢掉内置的 googleSearch（见 buildTools 注释）。
+	// 上游 v1internal 端点不支持「内置工具 + 函数调用」共存，混用必定 400：
+	//   Please enable tool_config.include_server_side_tool_invocations ...
+	// 该开关在 schema 里存在（TYPE_BOOL）且值确实送到了上游，但端点不认——
+	// 2026-08-17 实测 12 种写法（camel/snake、合并成单个 tool、functionCallingConfig
+	// 四种 mode）全部照旧 400，3.6 / 3.7 表现一致。
+	hasWebSearchTool := hasWebSearchTool(claudeReq.Tools) && !hasFunctionTool(claudeReq.Tools)
 	requestType := "agent"
 	targetModel := mappedModel
 	if hasWebSearchTool {
@@ -689,6 +697,20 @@ func hasWebSearchTool(tools []ClaudeTool) bool {
 	return false
 }
 
+// hasFunctionTool 判断工具列表里是否有普通函数工具（即非内置 web_search 的、有名字的工具）。
+// 与 hasWebSearchTool 一起用于识别「内置工具 + 函数调用」混用场景。
+func hasFunctionTool(tools []ClaudeTool) bool {
+	for _, tool := range tools {
+		if isWebSearchTool(tool) {
+			continue
+		}
+		if strings.TrimSpace(tool.Name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func isWebSearchTool(tool ClaudeTool) bool {
 	if strings.HasPrefix(tool.Type, "web_search") || tool.Type == "google_search" {
 		return true
@@ -766,6 +788,18 @@ func buildTools(tools []ClaudeTool) []GeminiToolDeclaration {
 		declarations = append(declarations, GeminiToolDeclaration{
 			FunctionDeclarations: funcDecls,
 		})
+	}
+	// 【定制】内置 googleSearch 与函数工具不能共存：上游 v1internal 端点对这种混用一律
+	// 400 INVALID_ARGUMENT（"Please enable tool_config.include_server_side_tool_invocations
+	// to use Built-in tools with Function calling."），而那个开关在该端点上不生效
+	// （2026-08-17 实测 12 种写法均无效）。触发方是 Codex / CC Switch——它们同时带
+	// web_search 和 shell 等函数工具。
+	//
+	// 取舍：丢内置搜索、保函数工具。函数工具是这类客户端的命脉（shell / apply_patch 等），
+	// 丢了整个会话就废了；服务端搜索只是锦上添花。反过来保搜索会让请求「能通但没用」。
+	if hasWebSearch && len(funcDecls) > 0 {
+		log.Printf("[antigravity] 内置 web_search 与 %d 个函数工具混用，上游不支持，已丢弃 web_search", len(funcDecls))
+		hasWebSearch = false
 	}
 	if hasWebSearch {
 		declarations = append(declarations, GeminiToolDeclaration{
