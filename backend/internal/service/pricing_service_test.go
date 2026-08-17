@@ -510,6 +510,35 @@ func TestBillingService_Gemini36FlashThinkingTierFallbacksAreBillable(t *testing
 	}
 }
 
+// TestBillingService_Gemini37FlashTieredIsBillable 锁住定制：3.7 Flash（仅 -tiered 变体上游可用）
+// 必须能计费，不能以 $0 入账。价格表尚无 gemini-3.7-flash 条目，命中的是 billing_service 的
+// fallbackPrices，**暂按 3.6 Flash 同价**——Google 公布官方价后要回来更新这里和 fallbackPrices。
+func TestBillingService_Gemini37FlashTieredIsBillable(t *testing.T) {
+	svc := NewBillingService(&config.Config{}, nil)
+	tokens := UsageTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000}
+
+	cost, err := svc.CalculateCost("gemini-3.7-flash-tiered", tokens, 1)
+	require.NoError(t, err)
+	require.InDelta(t, 1.5, cost.InputCost, 1e-12)
+	require.InDelta(t, 7.5, cost.OutputCost, 1e-12)
+	require.InDelta(t, 0.15, cost.CacheReadCost, 1e-12)
+	require.InDelta(t, 9.15, cost.TotalCost, 1e-12)
+}
+
+// TestPricingService_Gemini37FlashTieredUsesBaseCard 验证价格表补上 gemini-3.7-flash 之后，
+// -tiered 别名会自动落到那张价格卡（normalizeGeminiThinkingTierAlias 的归一化）。
+func TestPricingService_Gemini37FlashTieredUsesBaseCard(t *testing.T) {
+	basePricing := &LiteLLMModelPricing{
+		InputCostPerToken:  1.5e-6,
+		OutputCostPerToken: 7.5e-6,
+	}
+	svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gemini-3.7-flash": basePricing,
+	}}
+
+	require.Same(t, basePricing, svc.GetModelPricing("gemini-3.7-flash-tiered"))
+}
+
 func TestDefaultPricingIncludesGemini36FlashRates(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
 	require.NoError(t, err)

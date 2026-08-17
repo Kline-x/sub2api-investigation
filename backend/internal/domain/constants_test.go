@@ -73,6 +73,27 @@ func TestDefaultAntigravityModelMapping_Gemini36FlashModels(t *testing.T) {
 	}
 }
 
+// TestDefaultAntigravityModelMapping_Gemini37只有Tiered 锁住定制：3.7 只登记 -tiered，
+// 其余变体 2026-08-17 实测打上游一律 404，不进白名单（否则面板能选到必然失败的模型）。
+func TestDefaultAntigravityModelMapping_Gemini37只有Tiered(t *testing.T) {
+	if got := DefaultAntigravityModelMapping["gemini-3.7-flash-tiered"]; got != "gemini-3.7-flash-tiered" {
+		t.Fatalf("expected gemini-3.7-flash-tiered to map to itself, got %q", got)
+	}
+
+	for _, model := range []string{
+		"gemini-3.7-flash",
+		"gemini-3.7-flash-high",
+		"gemini-3.7-flash-low",
+		"gemini-3.7-flash-medium",
+		"gemini-3.7-pro",
+		"gemini-3.7-pro-high",
+	} {
+		if got, ok := DefaultAntigravityModelMapping[model]; ok {
+			t.Fatalf("模型 %s 上游返回 404，不应进白名单（当前映射到 %q）", model, got)
+		}
+	}
+}
+
 func TestDefaultBedrockModelMapping_ContainsNewClaudeModels(t *testing.T) {
 	t.Parallel()
 

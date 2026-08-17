@@ -285,6 +285,18 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown: false,
 	}
 
+	// 定制：Gemini 3.7 Flash（仅 -tiered 变体上游可用）。
+	// ⚠️ Google 尚未公布 3.7 的官方价格，也不在 model_prices_and_context_window.json 里，
+	// 这里暂按 3.6 Flash 同价计（$1.50 输入 / $7.50 输出 / $0.15 缓存读，每 MTok）。
+	// 不这么做的话，带 token 的请求会以 $0 入账，比按邻近档位估价更糟。
+	// **官方价格公布后必须回来更新这里。**
+	s.fallbackPrices["gemini-3.7-flash"] = &ModelPricing{
+		InputPricePerToken:     1.5e-6,
+		OutputPricePerToken:    7.5e-6,
+		CacheReadPricePerToken: 0.15e-6,
+		SupportsCacheBreakdown: false,
+	}
+
 	// OpenAI GPT-5.4（业务指定价格）
 	s.fallbackPrices["gpt-5.4"] = &ModelPricing{
 		InputPricePerToken:             2.5e-6,  // $2.5 per MTok
@@ -685,6 +697,10 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "gemini-3.6-flash") || strings.Contains(modelLower, "gemini-3-6-flash") {
 		return s.fallbackPrices["gemini-3.6-flash"]
+	}
+	// 定制：3.7 Flash（暂按 3.6 同价，见上方 fallbackPrices 注释）
+	if strings.Contains(modelLower, "gemini-3.7-flash") || strings.Contains(modelLower, "gemini-3-7-flash") {
+		return s.fallbackPrices["gemini-3.7-flash"]
 	}
 
 	// DeepSeek V4 系列：仅匹配已知 V4 Pro/Flash 与官方兼容别名

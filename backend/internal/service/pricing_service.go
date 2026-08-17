@@ -802,10 +802,14 @@ func normalizeModelNameForPricing(model string) string {
 // behavior, not the published token rate, so this keeps -high/-low/-medium and
 // -tiered requests on the same price card as gemini-3.6-flash.
 func normalizeGeminiThinkingTierAlias(model string) string {
-	const baseModel = "gemini-3.6-flash"
-	for _, tier := range []string{"-high", "-low", "-medium", "-tiered"} {
-		if model == baseModel+tier {
-			return baseModel
+	// 定制：3.7 Flash 一并纳入（目前只有 -tiered 变体上游可用）。价格表尚无
+	// gemini-3.7-flash 条目，命中的是 billing_service 的 fallback；等 Google 公布价格、
+	// 价格表补上 gemini-3.7-flash 后，这里的归一化会自动让 -tiered 落到那张价格卡上。
+	for _, baseModel := range []string{"gemini-3.6-flash", "gemini-3.7-flash"} {
+		for _, tier := range []string{"-high", "-low", "-medium", "-tiered"} {
+			if model == baseModel+tier {
+				return baseModel
+			}
 		}
 	}
 	return model

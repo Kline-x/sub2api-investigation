@@ -204,6 +204,12 @@ var geminiModels = []modelDef{
 	{ID: "gemini-3.6-flash-low", DisplayName: "Gemini 3.6 Flash Low", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.6-flash-medium", DisplayName: "Gemini 3.6 Flash Medium", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.6-flash-tiered", DisplayName: "Gemini 3.6 Flash", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
+	// 定制：Gemini 3.7 Flash 只有 -tiered 一个变体可用。2026-08-17 实测（daily 端点、
+	// 真实账号）：gemini-3.7-flash-tiered 返回 200 且有内容；裸名 gemini-3.7-flash 与
+	// -high/-low/-medium/-extra-low、gemini-3.7-pro*、-flash-image、-flash-agent 全部
+	// 404 Requested entity was not found，故只登记 -tiered，不把打不通的名字摆进目录。
+	// 上游账号「同步支持模型」接口不广播 3.7，上游 sub2api 也尚未收录。
+	{ID: "gemini-3.7-flash-tiered", DisplayName: "Gemini 3.7 Flash", CreatedAt: "2026-08-17T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-preview", DisplayName: "Gemini 3 Pro Preview", CreatedAt: "2025-06-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-image", DisplayName: "Gemini 3 Pro Image", CreatedAt: "2025-06-01T00:00:00Z"},
 }

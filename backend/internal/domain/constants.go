@@ -123,6 +123,9 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.6-flash-low":    "gemini-3.6-flash-low",
 	"gemini-3.6-flash-medium": "gemini-3.6-flash-medium",
 	"gemini-3.6-flash-tiered": "gemini-3.6-flash-tiered",
+	// Gemini 3.7 Flash：定制补入，上游未收录。只有 -tiered 变体上游可用（2026-08-17 实测，
+	// 其余 3.7 命名一律 404），故不登记 -high/-low/-medium 等
+	"gemini-3.7-flash-tiered": "gemini-3.7-flash-tiered",
 	// Gemini 3 image 兼容映射（向 3.1 image 迁移）
 	"gemini-3-pro-image":         "gemini-3.1-flash-image",
 	"gemini-3-pro-image-preview": "gemini-3.1-flash-image",

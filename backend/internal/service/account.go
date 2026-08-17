@@ -630,6 +630,8 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 				"gemini-3.6-flash-low",
 				"gemini-3.6-flash-medium",
 				"gemini-3.6-flash-tiered",
+				// 定制：3.7 只有 -tiered 可用（见 pkg/antigravity/claude_types.go 注释）
+				"gemini-3.7-flash-tiered",
 			})
 			applyAntigravityGemini31ProAliases(result)
 		}
