@@ -48,26 +48,37 @@ type antigravityRetryLoopResult struct {
 
 // resolveAntigravityForwardBaseURL 解析转发用 base URL。
 //
-// 默认使用生产端点 cloudcode-pa.googleapis.com（antigravity.BaseURLs 的首个地址，
-// 与账号 OAuth 登录/测试连接所用的 antigravity.BaseURL 一致）。
+// 【定制行为，与上游不同】默认使用 daily 端点 daily-cloudcode-pa.googleapis.com，
+// 与官方 Antigravity 客户端一致；上游默认走生产端点 cloudcode-pa.googleapis.com。
 //
-// 历史上这里改用 ForwardBaseURLs()（把 daily/sandbox 排到首位）并默认取首个地址，
-// 导致网关把带生产 OAuth token 的请求发到 daily-cloudcode-pa.sandbox.googleapis.com，
-// 上游拒绝 → 账号被 401「Invalid bearer token」/502 打入临时不可调度且无法恢复
-// （见 #3611 / #2962）。后台「测试连接」用的是生产端点，所以「测试成功但网关 401」。
+// 改默认的原因（上游 issue #5611）：持有 Google AI Pro（g1-pro-tier）的账号打生产端点
+// **必定 429**（账号档位级拒绝，与请求内容无关），官方客户端实际把推理请求发到 daily。
+// 本地实测同一账号、同一模型：prod 端点 429，daily 端点 200。
 //
-// daily/sandbox 端点仅供内部联调，需显式设置
-// GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=daily（或 sandbox）才启用。
+// 反向开关：GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=prod（或 production）切回生产端点，
+// 出问题时不必回滚版本。daily / sandbox 仍显式选 daily（兼容旧配置），其余值一律按默认走 daily。
+//
+// 历史注意（#3611 / #2962）：曾经默认 daily 优先，导致带生产 OAuth token 的请求被拒、
+// 账号 401「Invalid bearer token」/502 打入临时不可调度且无法恢复。但当时 daily 常量指的是
+// 已废弃的 daily-cloudcode-pa.sandbox.googleapis.com；v0.1.177-custom.2 已换成官方主机名
+// （对齐上游 PR #5625），该失败模式不再成立。
+//
+// 注意：这里按 URL 取值而非下标定位 daily（走 ForwardBaseURLs 的 daily 优先排序），
+// 所以不依赖 BaseURLs 的元素顺序；BaseURLs 里没有 daily 时退回首个地址。
 func resolveAntigravityForwardBaseURL() string {
 	baseURLs := antigravity.BaseURLs
 	if len(baseURLs) == 0 {
 		return ""
 	}
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv(antigravityForwardBaseURLEnv)))
-	if (mode == "daily" || mode == "sandbox") && len(baseURLs) > 1 {
-		return baseURLs[1]
+	if mode == "prod" || mode == "production" {
+		return baseURLs[0]
 	}
-	return baseURLs[0]
+	forward := antigravity.ForwardBaseURLs()
+	if len(forward) == 0 {
+		return baseURLs[0]
+	}
+	return forward[0]
 }
 
 // smartRetryAction 智能重试的处理结果

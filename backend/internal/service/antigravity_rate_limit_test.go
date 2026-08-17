@@ -1009,6 +1009,35 @@ func TestIsAntigravityAccountSwitchError(t *testing.T) {
 	}
 }
 
+// TestResolveAntigravityForwardBaseURL_定制默认走daily 用真实的 antigravity.BaseURLs 断言定制默认值。
+// 上游默认走 prod，本仓库默认走 daily（issue #5611：g1-pro-tier 账号打 prod 必定 429）。
+// 合并上游若看到默认值被改回 prod，即定制被覆盖。
+func TestResolveAntigravityForwardBaseURL_定制默认走daily(t *testing.T) {
+	const officialDailyURL = "https://daily-cloudcode-pa.googleapis.com"
+	const prodURL = "https://cloudcode-pa.googleapis.com"
+
+	cases := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{name: "未设置默认走 daily", env: "", want: officialDailyURL},
+		{name: "daily 显式选 daily", env: "daily", want: officialDailyURL},
+		{name: "sandbox 兼容旧配置仍选 daily", env: "sandbox", want: officialDailyURL},
+		{name: "prod 反向开关切回生产", env: "prod", want: prodURL},
+		{name: "大小写不敏感", env: "PROD", want: prodURL},
+		{name: "production 同义词", env: "  production  ", want: prodURL},
+		{name: "无法识别的值按默认走 daily", env: "https://daily-cloudcode-pa.googleapis.com", want: officialDailyURL},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(antigravityForwardBaseURLEnv, tc.env)
+			require.Equal(t, tc.want, resolveAntigravityForwardBaseURL())
+		})
+	}
+}
+
 func TestResolveAntigravityForwardBaseURL_DefaultDaily(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "")
 

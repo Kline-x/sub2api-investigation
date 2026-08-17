@@ -17,6 +17,31 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.177-custom.3（2026-08-17）
+
+**Antigravity 转发默认改走 daily 端点**（`service/antigravity_gateway_retry.go` 的
+`resolveAntigravityForwardBaseURL`）。与上游行为不同：上游默认 prod，本仓库默认 daily。
+
+- **动因**：上游 issue #5611——g1-pro-tier 账号打 prod 端点必定 429。本地 A/B 实测同一账号、
+  同一模型：prod 端点 429（面板测试连接报 `API 返回 429: {"code":429,"message":"Resource has been
+  exhausted (e.g. check quota)."}`），daily 端点 200。custom.2 只把 daily 指向官方主机名，
+  仍需部署侧加环境变量才生效；本版免配置。
+- **反向开关**：`GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=prod`（或 `production`）切回生产端点，
+  出问题不必回滚版本。`daily` / `sandbox` 仍显式选 daily（兼容旧配置）；
+  **其余值一律按默认走 daily**——旧逻辑下填完整 URL 会静默回落 prod，是 issue #5611 评论区的坑，本版顺带堵上。
+- **实现要点**：按 URL 取值定位 daily（走 `antigravity.ForwardBaseURLs()` 的 daily 优先排序），
+  不依赖 `BaseURLs` 元素顺序；`BaseURLs` 里没有 daily 时退回首个地址。
+- **影响面**：网关转发与面板「测试连接」都走这个函数，两者行为一致（不会再出现「测试成功但网关失败」）。
+  账号 OAuth 登录 / onboarding 仍用 `antigravity.BaseURL`（= prod），未改动。
+- **风险**：全局开关、非按账号，且开启后没有 prod 兜底
+  （`antigravityRetryLoop` 的 `availableURLs` 只有一个元素）。本版**刻意没加 URL fallback**——
+  那是另一项行为变更，要做需单独评估。
+- **护栏**：`service/antigravity_rate_limit_test.go` 的 `TestResolveAntigravityForwardBaseURL_定制默认走daily`
+  用真实 `BaseURLs` 逐个断言（未设置/daily/sandbox/prod/PROD/production/无法识别的值）。
+  合并上游看到默认值被改回 prod，即定制被覆盖。
+- **历史提醒**：#3611 / #2962 曾因默认 daily 优先导致账号 401/502 无法恢复，但当时 daily 常量指的是
+  已废弃的 sandbox 主机名，v0.1.177-custom.2 换成官方主机名后该失败模式不再成立。
+
 ## v0.1.177-custom.2（2026-08-17）
 
 Antigravity daily 端点对齐官方客户端：`antigravityDailyBaseURL` 由已废弃的
@@ -321,6 +346,7 @@ Antigravity 走的是独立的 `internal/pkg/antigravity` 包（用 `map[string]
 | **测试连接模型下拉用账号 `model_mapping`**（Antigravity 分支原本无条件返回硬编码 DefaultModels） | `handler/admin/account_handler.go`（`GetAvailableModels` 的 Antigravity 分支） |
 | **不要补发 `response.in_progress`**（试过更糟，见上文 v0.1.168-custom.2 条目） | `pkg/apicompat/anthropic_to_responses_response.go`、`chatcompletions_responses_bridge.go` 的注释 |
 | **Antigravity daily 端点用官方主机名**（`daily-cloudcode-pa.googleapis.com`，非 `.sandbox.`）<br>上游 PR #5625 同款改动但未合并，合并上游时**必查是否被带回 sandbox** | `pkg/antigravity/oauth.go`（`antigravityDailyBaseURL`）<br>护栏：`pkg/antigravity/oauth_test.go` 的 `TestForwardBaseURLs_Daily优先` 字面量断言 |
+| **Antigravity 转发默认走 daily**（上游默认 prod；`GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=prod` 反向切回）<br>上游没有对应改动，合并上游时**必查默认值是否被改回 prod** | `service/antigravity_gateway_retry.go`（`resolveAntigravityForwardBaseURL`）<br>护栏：`service/antigravity_rate_limit_test.go` 的 `TestResolveAntigravityForwardBaseURL_定制默认走daily` |
 
 ### ss 出站代理：合并上游必查清单
 
