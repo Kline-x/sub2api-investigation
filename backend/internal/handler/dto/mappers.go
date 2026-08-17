@@ -225,11 +225,41 @@ func groupFromServiceBase(g *service.Group) Group {
 	}
 }
 
+// applyAntigravityEffectiveModelMapping 让「编辑账号 → 模型限制」显示**有效**映射，
+// 而不是数据库里存的原文。
+//
+// 背景：Antigravity 账号的模型放行清单是「存的 mapping + 运行时默认透传」
+// （service.Account.GetModelMapping 里的 ensureAntigravityDefaultPassthroughs）。
+// 默认透传不落库，所以像 gemini-3.7-flash-tiered 这类上游不广播、靠本地目录补进来的模型，
+// 网关放行、模型下拉里都有，唯独这个编辑列表看不到，容易被误判成「白名单会拦」。
+//
+// 只在账号**已经配了**模型限制时叠加：mapping 为空表示「不限制」，
+// 此时摊开几十条默认清单反而把「未配置」变成「配了一大堆」。
+func applyAntigravityEffectiveModelMapping(a *service.Account, creds map[string]any) {
+	if a == nil || creds == nil || a.Platform != service.PlatformAntigravity {
+		return
+	}
+	raw, _ := creds["model_mapping"].(map[string]any)
+	if len(raw) == 0 {
+		return
+	}
+	effective := a.GetModelMapping()
+	if len(effective) == 0 {
+		return
+	}
+	merged := make(map[string]any, len(effective))
+	for from, to := range effective {
+		merged[from] = to
+	}
+	creds["model_mapping"] = merged
+}
+
 func AccountFromServiceShallow(a *service.Account) *Account {
 	if a == nil {
 		return nil
 	}
 	redactedCreds, credsStatus := RedactCredentials(a.Credentials)
+	applyAntigravityEffectiveModelMapping(a, redactedCreds)
 	extra := redactAccountManagedExtra(a.Extra)
 	var ollamaCloudUsage *service.OllamaCloudUsageState
 	if state := service.OllamaCloudUsageStateFromAccount(a); state.Eligible {

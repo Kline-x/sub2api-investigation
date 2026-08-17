@@ -17,6 +17,45 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.177-custom.5（2026-08-17）
+
+两件事，都围绕 custom.4 补进来的 `gemini-3.7-flash-tiered`。
+
+### 1. 计费改用 Google 官方牌价（两段式，自动切档）
+
+custom.4 里 3.7 的价格是按 3.6 Flash **估的**（当时以为官方没公布）。查证后确认官方定价页
+（ai.google.dev/gemini-api/docs/pricing）对 3.7 Flash 付费档写的是分两段：
+
+| | 至 2026-12-31 | 2027-01-01 起 |
+|---|---|---|
+| 输入 | $0.75 / MTok | $1.50 |
+| 输出（含思考 token） | $3.75 / MTok | $7.50 |
+| 上下文缓存 | $0.075 / MTok | $0.15 |
+
+- 实现见 `service/billing_service.go` 的 `gemini37FlashPricing()`：**每次取价都判一次时间**，
+  所以跨年当天不重启进程也会自动切到 standard 档。`fallbackPrices["gemini-3.7-flash"]`
+  仍注册 key（`IsModelSupported` / `ListSupportedModels` 靠它认模型），但真正取价走该函数
+- 时钟通过包级 `billingNow` 变量注入，测试可覆盖
+- **未建模**：缓存**存储**费（$0.50→$1.00 / 1M tokens / 小时）不在 `ModelPricing` 的建模范围内
+- **注意**：若将来 `model_prices_and_context_window.json` 补上 `gemini-3.7-flash` 条目，
+  `GetModelPricing` 会优先用价格表——那份数据没有时间维度，introductory 期内可能按 standard 价计
+- 护栏：`service/pricing_service_test.go` 的 `TestBillingService_Gemini37FlashTieredUsesOfficialRates`
+  （introductory 期内 / 最后一天 / 2027-01-01 三个时间点）
+
+### 2. 「编辑账号 → 模型限制」显示有效映射
+
+`handler/dto/mappers.go` 的 `applyAntigravityEffectiveModelMapping`：Antigravity 账号的
+`credentials.model_mapping` 返回前叠加运行时默认透传（`GetModelMapping()` 的结果）。
+
+- **动因**：默认透传不落库，`gemini-3.7-flash-tiered` 这类靠本地目录补进来的模型，
+  网关放行、模型下拉都有，唯独编辑列表看不到，容易被误判成「白名单会拦」
+  （实测：库里 24 条不含 3.7，请求照样 200）
+- **只在账号已配模型限制时叠加**：mapping 为空表示「不限制」，
+  此时摊开几十条默认清单会把「未配置」变成「配了一大堆」
+- 副作用：用户在该弹窗点「更新」会把叠加后的条目固化进数据库，之后调整默认透传列表对这些账号不再生效
+- 护栏：`handler/dto/account_mapper_antigravity_model_mapping_test.go`（3 个用例：
+  含默认透传 / 未配置不摊开 / 非 Antigravity 平台不受影响）
+
 ## v0.1.177-custom.4（2026-08-17）
 
 **补入 Antigravity 的 Gemini 3.7 Flash 模型**（上游 v0.1.177 及 main 均未收录，
@@ -380,7 +419,8 @@ Antigravity 走的是独立的 `internal/pkg/antigravity` 包（用 `map[string]
 | **不要补发 `response.in_progress`**（试过更糟，见上文 v0.1.168-custom.2 条目） | `pkg/apicompat/anthropic_to_responses_response.go`、`chatcompletions_responses_bridge.go` 的注释 |
 | **Antigravity daily 端点用官方主机名**（`daily-cloudcode-pa.googleapis.com`，非 `.sandbox.`）<br>上游 PR #5625 同款改动但未合并，合并上游时**必查是否被带回 sandbox** | `pkg/antigravity/oauth.go`（`antigravityDailyBaseURL`）<br>护栏：`pkg/antigravity/oauth_test.go` 的 `TestForwardBaseURLs_Daily优先` 字面量断言 |
 | **Antigravity 转发默认走 daily**（上游默认 prod；`GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=prod` 反向切回）<br>上游没有对应改动，合并上游时**必查默认值是否被改回 prod** | `service/antigravity_gateway_retry.go`（`resolveAntigravityForwardBaseURL`）<br>护栏：`service/antigravity_rate_limit_test.go` 的 `TestResolveAntigravityForwardBaseURL_定制默认走daily` |
-| **Antigravity Gemini 3.7 Flash**（只有 `-tiered` 变体，其余 3.7 命名上游 404）<br>上游未收录；**计费是按 3.6 估的，官方价公布后要更新** | `pkg/antigravity/claude_types.go`（`geminiModels`）、`domain/constants.go`（`DefaultAntigravityModelMapping`）、`service/account.go`（`ensureAntigravityDefaultPassthroughs`）、`service/billing_service.go`（`fallbackPrices` + 前缀分支）、`service/pricing_service.go`（`normalizeGeminiThinkingTierAlias`）<br>护栏：`claude_types_test.go` / `constants_test.go` / `pricing_service_test.go` 共 4 个用例 |
+| **Antigravity Gemini 3.7 Flash**（只有 `-tiered` 变体，其余 3.7 命名上游 404）<br>上游未收录；计费按官方牌价两段式，**2027-01-01 自动切档** | `pkg/antigravity/claude_types.go`（`geminiModels`）、`domain/constants.go`（`DefaultAntigravityModelMapping`）、`service/account.go`（`ensureAntigravityDefaultPassthroughs`）、`service/billing_service.go`（`gemini37FlashPricing` + `billingNow` + 前缀分支）、`service/pricing_service.go`（`normalizeGeminiThinkingTierAlias`）<br>护栏：`claude_types_test.go` / `constants_test.go` / `pricing_service_test.go` |
+| **Antigravity 模型限制显示有效映射**（编辑账号弹窗叠加运行时默认透传，仅在已配限制时） | `handler/dto/mappers.go`（`applyAntigravityEffectiveModelMapping`）<br>护栏：`handler/dto/account_mapper_antigravity_model_mapping_test.go` |
 
 ### ss 出站代理：合并上游必查清单
 

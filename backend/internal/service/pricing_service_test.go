@@ -510,19 +510,60 @@ func TestBillingService_Gemini36FlashThinkingTierFallbacksAreBillable(t *testing
 	}
 }
 
-// TestBillingService_Gemini37FlashTieredIsBillable 锁住定制：3.7 Flash（仅 -tiered 变体上游可用）
-// 必须能计费，不能以 $0 入账。价格表尚无 gemini-3.7-flash 条目，命中的是 billing_service 的
-// fallbackPrices，**暂按 3.6 Flash 同价**——Google 公布官方价后要回来更新这里和 fallbackPrices。
-func TestBillingService_Gemini37FlashTieredIsBillable(t *testing.T) {
-	svc := NewBillingService(&config.Config{}, nil)
+// TestBillingService_Gemini37FlashTieredUsesOfficialRates 锁住定制：3.7 Flash（仅 -tiered
+// 变体上游可用）按 Google 官方牌价计，且必须能计费、不能以 $0 入账。
+// 官方牌价分两段：introductory $0.75/$3.75/$0.075（至 2026-12-31），
+// 2027-01-01 起 standard $1.50/$7.50/$0.15。每次取价都判时间，跨年不重启也会切档。
+func TestBillingService_Gemini37FlashTieredUsesOfficialRates(t *testing.T) {
 	tokens := UsageTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000}
 
-	cost, err := svc.CalculateCost("gemini-3.7-flash-tiered", tokens, 1)
-	require.NoError(t, err)
-	require.InDelta(t, 1.5, cost.InputCost, 1e-12)
-	require.InDelta(t, 7.5, cost.OutputCost, 1e-12)
-	require.InDelta(t, 0.15, cost.CacheReadCost, 1e-12)
-	require.InDelta(t, 9.15, cost.TotalCost, 1e-12)
+	cases := []struct {
+		name                       string
+		now                        time.Time
+		wantIn, wantOut, wantCache float64
+		wantTotal                  float64
+	}{
+		{
+			name:      "introductory 期内",
+			now:       time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC),
+			wantIn:    0.75,
+			wantOut:   3.75,
+			wantCache: 0.075,
+			wantTotal: 4.575,
+		},
+		{
+			name:      "introductory 最后一天",
+			now:       time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+			wantIn:    0.75,
+			wantOut:   3.75,
+			wantCache: 0.075,
+			wantTotal: 4.575,
+		},
+		{
+			name:      "2027-01-01 起切 standard",
+			now:       time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
+			wantIn:    1.5,
+			wantOut:   7.5,
+			wantCache: 0.15,
+			wantTotal: 9.15,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := billingNow
+			billingNow = func() time.Time { return tc.now }
+			defer func() { billingNow = orig }()
+
+			svc := NewBillingService(&config.Config{}, nil)
+			cost, err := svc.CalculateCost("gemini-3.7-flash-tiered", tokens, 1)
+			require.NoError(t, err)
+			require.InDelta(t, tc.wantIn, cost.InputCost, 1e-12)
+			require.InDelta(t, tc.wantOut, cost.OutputCost, 1e-12)
+			require.InDelta(t, tc.wantCache, cost.CacheReadCost, 1e-12)
+			require.InDelta(t, tc.wantTotal, cost.TotalCost, 1e-12)
+		})
+	}
 }
 
 // TestPricingService_Gemini37FlashTieredUsesBaseCard 验证价格表补上 gemini-3.7-flash 之后，

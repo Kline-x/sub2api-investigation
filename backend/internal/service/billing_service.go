@@ -13,6 +13,49 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
+// ─── 定制：Gemini 3.7 Flash 官方牌价（两段式）───────────────────────────────
+//
+// Google 官方定价页（ai.google.dev/gemini-api/docs/pricing）对 Gemini 3.7 Flash 付费档写的是：
+// 输入 $0.75、输出（含思考 token）$3.75、上下文缓存 $0.075，每 1M tokens，
+// **through December 31, 2026**；2027-01-01 起恢复 $1.50 / $7.50 / $0.15。
+//
+// 内置的 model_prices_and_context_window.json 目前没有 gemini-3.7-flash 条目
+// （上游 sub2api 也还没收录该模型），所以计费一定走这里的 fallback。
+// 若将来价格表补上了该条目，GetModelPricing 会优先用价格表——注意那份数据没有时间维度，
+// introductory 期内可能按 standard 价计。
+//
+// 说明：缓存**存储**费（$0.50→$1.00 / 1M tokens / 小时）不在 ModelPricing 的建模范围内，未计入。
+var (
+	// gemini37FlashIntroUntil introductory 定价的结束时刻（UTC），到点自动切 standard
+	gemini37FlashIntroUntil = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	gemini37FlashIntroPricing = &ModelPricing{
+		InputPricePerToken:     0.75e-6,  // $0.75 per MTok
+		OutputPricePerToken:    3.75e-6,  // $3.75 per MTok
+		CacheReadPricePerToken: 0.075e-6, // $0.075 per MTok
+		SupportsCacheBreakdown: false,
+	}
+
+	gemini37FlashStandardPricing = &ModelPricing{
+		InputPricePerToken:     1.5e-6,  // $1.50 per MTok
+		OutputPricePerToken:    7.5e-6,  // $7.50 per MTok
+		CacheReadPricePerToken: 0.15e-6, // $0.15 per MTok
+		SupportsCacheBreakdown: false,
+	}
+
+	// billingNow 供测试覆盖，生产恒为 time.Now
+	billingNow = time.Now
+)
+
+// gemini37FlashPricing 按当前时间返回 Gemini 3.7 Flash 的官方档位价格。
+// 每次取价都判一次时间，所以跨年当天不重启进程也会自动切到 standard 档。
+func gemini37FlashPricing() *ModelPricing {
+	if billingNow().UTC().Before(gemini37FlashIntroUntil) {
+		return gemini37FlashIntroPricing
+	}
+	return gemini37FlashStandardPricing
+}
+
 // APIKeyRateLimitCacheData holds rate limit usage data cached in Redis.
 type APIKeyRateLimitCacheData struct {
 	Usage5h  float64 `json:"usage_5h"`
@@ -285,17 +328,11 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown: false,
 	}
 
-	// 定制：Gemini 3.7 Flash（仅 -tiered 变体上游可用）。
-	// ⚠️ Google 尚未公布 3.7 的官方价格，也不在 model_prices_and_context_window.json 里，
-	// 这里暂按 3.6 Flash 同价计（$1.50 输入 / $7.50 输出 / $0.15 缓存读，每 MTok）。
-	// 不这么做的话，带 token 的请求会以 $0 入账，比按邻近档位估价更糟。
-	// **官方价格公布后必须回来更新这里。**
-	s.fallbackPrices["gemini-3.7-flash"] = &ModelPricing{
-		InputPricePerToken:     1.5e-6,
-		OutputPricePerToken:    7.5e-6,
-		CacheReadPricePerToken: 0.15e-6,
-		SupportsCacheBreakdown: false,
-	}
+	// 定制：Gemini 3.7 Flash（仅 -tiered 变体上游可用）。按 Google 官方牌价计，
+	// 分 introductory / standard 两段，实际取哪一档见 gemini37FlashPricing()。
+	// 这里只是把 key 注册进 fallbackPrices，让 IsModelSupported / ListSupportedModels 认得它；
+	// 真正的取价走 gemini37FlashPricing()，否则跨年时不重启进程就不会切档。
+	s.fallbackPrices["gemini-3.7-flash"] = gemini37FlashPricing()
 
 	// OpenAI GPT-5.4（业务指定价格）
 	s.fallbackPrices["gpt-5.4"] = &ModelPricing{
@@ -698,9 +735,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	if strings.Contains(modelLower, "gemini-3.6-flash") || strings.Contains(modelLower, "gemini-3-6-flash") {
 		return s.fallbackPrices["gemini-3.6-flash"]
 	}
-	// 定制：3.7 Flash（暂按 3.6 同价，见上方 fallbackPrices 注释）
+	// 定制：3.7 Flash 按官方牌价，且随 introductory 期结束自动切档（见 gemini37FlashPricing）
 	if strings.Contains(modelLower, "gemini-3.7-flash") || strings.Contains(modelLower, "gemini-3-7-flash") {
-		return s.fallbackPrices["gemini-3.7-flash"]
+		return gemini37FlashPricing()
 	}
 
 	// DeepSeek V4 系列：仅匹配已知 V4 Pro/Flash 与官方兼容别名
