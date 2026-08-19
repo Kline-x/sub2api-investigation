@@ -294,6 +294,16 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 				ID:   state.CurrentItemID,
 			},
 		}))
+		// reasoning 的 summary part 生命周期：codex 按 part.added → text.delta →
+		// text.done → part.done 渲染推理过程，缺 part 事件时 delta 没有可写入的槽位，
+		// 表现为「工具调用能显示、推理过程不显示」（2026-08-19 实测）。
+		// 与 message 分支的 content_part.added 对称。
+		events = append(events, makeResponsesEvent(state, "response.reasoning_summary_part.added", &ResponsesStreamEvent{
+			OutputIndex:  state.OutputIndex,
+			SummaryIndex: 0,
+			ItemID:       state.CurrentItemID,
+			Part:         &ResponsesContentPart{Type: "summary_text", Text: ""},
+		}))
 
 	case "text":
 		// If we don't have an open message item, open one
@@ -407,12 +417,22 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 func anthToResHandleContentBlockStop(evt *AnthropicStreamEvent, state *AnthropicEventToResponsesState) []ResponsesStreamEvent {
 	switch state.CurrentItemType {
 	case "reasoning":
-		// Emit reasoning summary done + output item done
+		// text.done 必须带累计全文：原先只设 ItemID/索引，线上是 "text":""，
+		// 按 done 事件渲染的客户端拿到空串。与 message 分支的 output_text.done 对称。
+		// summary 要在 closeCurrentResponsesItem 之前取——它会重置 CurrentSummary。
+		summary := state.CurrentSummary
 		events := []ResponsesStreamEvent{
 			makeResponsesEvent(state, "response.reasoning_summary_text.done", &ResponsesStreamEvent{
 				OutputIndex:  state.OutputIndex,
 				SummaryIndex: 0,
 				ItemID:       state.CurrentItemID,
+				Text:         summary,
+			}),
+			makeResponsesEvent(state, "response.reasoning_summary_part.done", &ResponsesStreamEvent{
+				OutputIndex:  state.OutputIndex,
+				SummaryIndex: 0,
+				ItemID:       state.CurrentItemID,
+				Part:         &ResponsesContentPart{Type: "summary_text", Text: summary},
 			}),
 		}
 		events = append(events, closeCurrentResponsesItem(state)...)
