@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,17 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	}
 	if strings.TrimSpace(claudeReq.Model) == "" {
 		return nil, s.writeClaudeError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
+	}
+
+	// === DEBUG: 客户端原始请求（需 SUB2API_DEBUG_GATEWAY_BODY，未设置时零开销）===
+	if c != nil {
+		DebugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
+			"path":         "antigravity/messages",
+			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"account_type": string(account.Type),
+			"model":        claudeReq.Model,
+			"stream":       strconv.FormatBool(claudeReq.Stream),
+		})
 	}
 
 	originalModel := claudeReq.Model
@@ -93,6 +105,15 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	if err != nil {
 		return nil, s.writeClaudeError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request")
 	}
+
+	// === DEBUG: 转发给上游的 Gemini body（对照客户端原始请求，定位字段丢在哪一层）===
+	DebugLogGatewaySnapshot("UPSTREAM_FORWARD", nil, geminiBody, map[string]string{
+		"path":          "antigravity/messages",
+		"account":       fmt.Sprintf("%d(%s)", account.ID, account.Name),
+		"mapped_model":  mappedModel,
+		"transformer":   "TransformClaudeToGeminiWithOptions",
+		"client_thinks": strconv.FormatBool(thinkingEnabled),
+	})
 
 	// Antigravity 上游只支持流式请求，统一使用 streamGenerateContent
 	// 如果客户端请求非流式，在响应处理阶段会收集完整流式响应后转换返回

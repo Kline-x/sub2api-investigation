@@ -1502,7 +1502,26 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 		return
 	}
 	s.debugGatewayBodyFile.Store(f)
+	// 【定制】同时存一份包级句柄：Antigravity / Gemini 等平台不走 GatewayService.Forward，
+	// 拿不到 s，需要包级入口才能落同一份快照。详见 DebugLogGatewaySnapshot。
+	debugGatewayBodySharedFile.Store(f)
 	slog.Info("gateway debug logging enabled", "path", path)
+}
+
+// debugGatewayBodySharedFile 与 GatewayService.debugGatewayBodyFile 指向同一个文件句柄，
+// 供不持有 GatewayService 的转发路径（Antigravity 等）使用。
+var debugGatewayBodySharedFile atomic.Pointer[os.File]
+
+// DebugLogGatewaySnapshot 是 debugLogGatewaySnapshot 的包级入口。
+//
+// 【为什么需要】SUB2API_DEBUG_GATEWAY_BODY 原先只挂在 GatewayService.Forward 上（Anthropic
+// 平台账号）。Antigravity 账号走的是 AntigravityGatewayService 的独立转发链路，开了这个变量
+// 也一个字节都不会写（2026-08-19 实测日志文件 0 字节），导致「客户端到底发了什么」这类问题
+// 只能靠外部对照实验推断。这里补上包级入口，让 Antigravity 链路也能落快照。
+//
+// 不设置环境变量时句柄为 nil，直接 return，零开销。
+func DebugLogGatewaySnapshot(tag string, headers http.Header, body []byte, extra map[string]string) {
+	writeDebugGatewaySnapshot(debugGatewayBodySharedFile.Load(), tag, headers, body, extra)
 }
 
 // debugLogGatewaySnapshot 将网关请求的完整快照（headers + body）写入独立的调试日志文件，
@@ -1515,7 +1534,10 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 //
 // tag: "CLIENT_ORIGINAL" 或 "UPSTREAM_FORWARD"
 func (s *GatewayService) debugLogGatewaySnapshot(tag string, headers http.Header, body []byte, extra map[string]string) {
-	f := s.debugGatewayBodyFile.Load()
+	writeDebugGatewaySnapshot(s.debugGatewayBodyFile.Load(), tag, headers, body, extra)
+}
+
+func writeDebugGatewaySnapshot(f *os.File, tag string, headers http.Header, body []byte, extra map[string]string) {
 	if f == nil {
 		return
 	}

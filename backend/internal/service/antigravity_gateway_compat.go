@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,9 @@ type antigravityCompatRequest struct {
 	includeUsage    bool
 	startTime       time.Time
 	reasoningEffort *string
+	// clientToolMapping 记录 Codex 私有工具（custom / tool_search / namespace）被降级成普通
+	// function 工具时的还原信息。仅 Responses 协议会填。详见 adaptAntigravityResponsesClientTools。
+	clientToolMapping apicompat.ResponsesClientToolMapping
 }
 
 type antigravityCompatUpstreamCall struct {
@@ -60,6 +64,15 @@ func (s *AntigravityGatewayService) ForwardAsChatCompletions(
 ) (*ForwardResult, error) {
 	if err := s.validateAntigravityCompatAccount(c, account); err != nil {
 		return nil, err
+	}
+
+	// === DEBUG: 客户端原始请求（需 SUB2API_DEBUG_GATEWAY_BODY，未设置时零开销）===
+	if c != nil {
+		DebugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
+			"path":         "antigravity/chat_completions",
+			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"account_type": string(account.Type),
+		})
 	}
 
 	var request apicompat.ChatCompletionsRequest
@@ -109,8 +122,24 @@ func (s *AntigravityGatewayService) ForwardAsResponses(
 		return nil, err
 	}
 
+	// === DEBUG: 客户端原始请求（需 SUB2API_DEBUG_GATEWAY_BODY，未设置时零开销）===
+	if c != nil {
+		DebugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
+			"path":         "antigravity/responses",
+			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"account_type": string(account.Type),
+		})
+	}
+
+	// Codex 私有工具降级：tool_search / namespace / custom → 普通 function 工具。
+	// 必须在解析成 ResponsesRequest 之前做，因为降级会改写 tools 与 input 里的历史项。
+	adaptedBody, clientToolMapping, err := adaptAntigravityResponsesClientTools(body)
+	if err != nil {
+		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+	}
+
 	var request apicompat.ResponsesRequest
-	if json.Unmarshal(body, &request) != nil {
+	if json.Unmarshal(adaptedBody, &request) != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 	}
 	if strings.TrimSpace(request.Model) == "" {
@@ -128,14 +157,60 @@ func (s *AntigravityGatewayService) ForwardAsResponses(
 	}
 
 	return s.forwardAntigravityCompat(ctx, c, account, antigravityCompatRequest{
-		protocol:        antigravityCompatResponses,
-		originalBody:    body,
-		claudeBody:      claudeBody,
-		originalModel:   request.Model,
-		clientStream:    request.Stream,
-		startTime:       time.Now(),
-		reasoningEffort: ExtractResponsesReasoningEffortFromBody(body),
+		protocol:          antigravityCompatResponses,
+		originalBody:      body,
+		claudeBody:        claudeBody,
+		originalModel:     request.Model,
+		clientStream:      request.Stream,
+		startTime:         time.Now(),
+		reasoningEffort:   ExtractResponsesReasoningEffortFromBody(body),
+		clientToolMapping: clientToolMapping,
 	})
+}
+
+// adaptAntigravityResponsesClientTools 把 Codex 的客户端专有工具降级成上游能理解的 function 工具。
+//
+// 【为什么】Codex 的 Responses 请求里有三类非标工具：
+//   - {"type":"tool_search"}        —— 无 name，用于按需加载延迟工具（子 agent 的 multi_agent_v1
+//     就只能通过它拿到）
+//   - {"type":"namespace", ...}     —— 工具集，真正可调的是它 tools[] 里的子工具
+//   - {"type":"custom", ...}        —— freeform 工具，入参是自由文本而非 JSON
+//
+// 而 Antigravity 链路是 Responses → Anthropic → Gemini 两跳转换，
+// convertResponsesToAnthropicTools 只认 function/custom/web_search，其余走 default 原样透传：
+// tool_search 变成一个无 name 的工具，被 antigravity 的 buildTools 以
+// "skipping tool with empty name" 丢弃；namespace 变成一个空参数的假函数，子工具全丢。
+//
+// 结果是模型既搜不到延迟工具、又看到一堆调了没用的壳工具，只能瞎猜着直接调 namespace 名，
+// Codex 收到无法路由的调用后回 "unsupported call: multi_agent_v1"（2026-08-19 从 Codex
+// rollout 日志确认：正常链路是 tool_search_call → tool_search_output(namespace multi_agent_v1)
+// → 调 spawn_agent，而 Antigravity 链路上第一步就不存在）。
+//
+// 复用 apicompat.AdaptResponsesClientTools —— 上游已经为 OpenAI / Grok 路径写好了这套降级与
+// 还原，只是一直没接到 Antigravity 上。additional_tools 的摊平同样沿用 Responses 直转路径的做法。
+func adaptAntigravityResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var requestBody map[string]any
+	if err := decoder.Decode(&requestBody); err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	additionalToolsChanged, err := liftResponsesAdditionalTools(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	mapping, changed, err := apicompat.AdaptResponsesClientTools(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	if !changed && !additionalToolsChanged {
+		return body, mapping, nil
+	}
+	rebuilt, err := json.Marshal(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	return rebuilt, mapping, nil
 }
 
 func (s *AntigravityGatewayService) validateAntigravityCompatAccount(c *gin.Context, account *Account) error {
@@ -241,6 +316,19 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	if err != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", "Invalid request")
 	}
+
+	// === DEBUG: 中间态（转成 Anthropic 之后）与最终转发给上游的 Gemini body ===
+	DebugLogGatewaySnapshot("ANTHROPIC_INTERMEDIATE", nil, request.claudeBody, map[string]string{
+		"path":         "antigravity/compat",
+		"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+		"mapped_model": mappedModel,
+	})
+	DebugLogGatewaySnapshot("UPSTREAM_FORWARD", nil, geminiBody, map[string]string{
+		"path":         "antigravity/compat",
+		"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+		"mapped_model": mappedModel,
+		"transformer":  "buildAntigravityCompatGeminiBody",
+	})
 
 	request.reasoningEffort = ApplyThinkingEnabledFallback(request.reasoningEffort, request.originalBody, mappedModel)
 	return &antigravityCompatUpstreamCall{
@@ -455,13 +543,13 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatSuccess(
 				call.request.includeUsage,
 			)
 		}
-		return s.handleResponsesStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel)
+		return s.handleResponsesStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel, call.request.clientToolMapping)
 	}
 
 	if call.request.protocol == antigravityCompatChatCompletions {
 		return s.handleChatCompletionsNonStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel)
 	}
-	return s.handleResponsesNonStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel)
+	return s.handleResponsesNonStreamingFromAntigravity(c, resp, call.request.startTime, call.request.originalModel, call.request.clientToolMapping)
 }
 
 func (s *AntigravityGatewayService) handleAntigravityCompatHTTPError(
@@ -594,11 +682,14 @@ func (s *AntigravityGatewayService) handleChatCompletionsNonStreamingFromAntigra
 	return result, nil
 }
 
+// handleResponsesNonStreamingFromAntigravity 处理 Responses 协议的非流式响应。
+// mapping 可选：语义同流式版本。
 func (s *AntigravityGatewayService) handleResponsesNonStreamingFromAntigravity(
 	c *gin.Context,
 	resp *http.Response,
 	startTime time.Time,
 	originalModel string,
+	mapping ...apicompat.ResponsesClientToolMapping,
 ) (*antigravityStreamResult, error) {
 	claudeResponse, result, err := s.collectClaudeStreamResponse(c, resp, startTime, originalModel)
 	if err != nil {
@@ -608,7 +699,18 @@ func (s *AntigravityGatewayService) handleResponsesNonStreamingFromAntigravity(
 	if json.Unmarshal(claudeResponse, &anthropicResponse) != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
-	c.JSON(http.StatusOK, apicompat.AnthropicToResponsesResponse(&anthropicResponse))
+
+	responsesResponse := apicompat.AnthropicToResponsesResponse(&anthropicResponse)
+	if len(mapping) > 0 && (len(mapping[0].CustomTools) > 0 || mapping[0].ToolSearch || len(mapping[0].NamespaceTools) > 0) {
+		if payload, marshalErr := json.Marshal(responsesResponse); marshalErr == nil {
+			if restored, _, restoreErr := apicompat.RestoreResponsesClientToolPayload(payload, mapping[0]); restoreErr == nil {
+				c.Data(http.StatusOK, "application/json; charset=utf-8", restored)
+				return result, nil
+			}
+		}
+		// 还原失败时退回未还原的响应，保证请求不至于失败。
+	}
+	c.JSON(http.StatusOK, responsesResponse)
 	return result, nil
 }
 

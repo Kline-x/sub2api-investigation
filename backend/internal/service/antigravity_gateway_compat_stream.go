@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 type antigravityCompatStreamAdapter interface {
@@ -71,12 +72,21 @@ func (a *antigravityChatStreamAdapter) emitResponseEvent(event *apicompat.Respon
 
 type antigravityResponsesStreamAdapter struct {
 	anthropicState *apicompat.AnthropicEventToResponsesState
+	// clientToolRestorer 把降级过的 Codex 私有工具调用还原回 custom_tool_call /
+	// tool_search_call / 带 namespace 的 function_call。nil 表示本次请求没有这类工具。
+	// 详见 adaptAntigravityResponsesClientTools。
+	clientToolRestorer *apicompat.ResponsesClientToolStreamRestorer
 }
 
-func newAntigravityResponsesStreamAdapter(model string) *antigravityResponsesStreamAdapter {
+func newAntigravityResponsesStreamAdapter(model string, mapping ...apicompat.ResponsesClientToolMapping) *antigravityResponsesStreamAdapter {
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = model
-	return &antigravityResponsesStreamAdapter{anthropicState: state}
+	adapter := &antigravityResponsesStreamAdapter{anthropicState: state}
+	// 只有请求里确实带了 Codex 私有工具才装还原器；否则保持原有直出路径不变。
+	if len(mapping) > 0 && (len(mapping[0].CustomTools) > 0 || mapping[0].ToolSearch || len(mapping[0].NamespaceTools) > 0) {
+		adapter.clientToolRestorer = apicompat.NewResponsesClientToolStreamRestorer(mapping[0])
+	}
+	return adapter
 }
 
 func (a *antigravityResponsesStreamAdapter) Emit(event *apicompat.AnthropicStreamEvent, writer *antigravityClientWriter) {
@@ -96,8 +106,30 @@ func (a *antigravityResponsesStreamAdapter) WriteError(writer *antigravityClient
 }
 
 func (a *antigravityResponsesStreamAdapter) emitResponseEvent(event apicompat.ResponsesStreamEvent, writer *antigravityClientWriter) {
-	if data, err := apicompat.ResponsesEventToSSE(event); err == nil {
-		writer.Write([]byte(data))
+	if a.clientToolRestorer == nil {
+		if data, err := apicompat.ResponsesEventToSSE(event); err == nil {
+			writer.Write([]byte(data))
+		}
+		return
+	}
+
+	// 带私有工具时先过还原器：一个上游事件可能被抑制（function 的 arguments 增量）
+	// 或扩成两个（custom 调用的收尾），所以按返回的 payload 列表逐条下发。
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	payloads, _, err := a.clientToolRestorer.RestoreEvent(payload)
+	if err != nil {
+		// 还原失败时退回原样下发，宁可少一次工具路由也不要断流。
+		if data, sseErr := apicompat.ResponsesEventToSSE(event); sseErr == nil {
+			writer.Write([]byte(data))
+		}
+		return
+	}
+	for _, restored := range payloads {
+		eventType := gjson.GetBytes(restored, "type").String()
+		writer.Fprintf("event: %s\ndata: %s\n\n", eventType, restored)
 	}
 }
 
@@ -457,18 +489,21 @@ func (s *AntigravityGatewayService) handleChatCompletionsStreamingFromAntigravit
 	)
 }
 
+// handleResponsesStreamingFromAntigravity 处理 Responses 协议的流式响应。
+// mapping 可选：带 Codex 私有工具时传入，用于把降级过的调用还原回客户端能路由的形态。
 func (s *AntigravityGatewayService) handleResponsesStreamingFromAntigravity(
 	c *gin.Context,
 	resp *http.Response,
 	startTime time.Time,
 	originalModel string,
+	mapping ...apicompat.ResponsesClientToolMapping,
 ) (*antigravityStreamResult, error) {
 	return s.handleAntigravityCompatStream(
 		c,
 		resp,
 		startTime,
 		originalModel,
-		newAntigravityResponsesStreamAdapter(originalModel),
+		newAntigravityResponsesStreamAdapter(originalModel, mapping...),
 		"antigravity responses stream",
 	)
 }

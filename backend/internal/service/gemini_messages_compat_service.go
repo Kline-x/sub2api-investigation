@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
@@ -3646,10 +3647,57 @@ func convertClaudeGenerationConfig(req map[string]any) map[string]any {
 	if stopSeq, ok := req["stop_sequences"].([]any); ok && len(stopSeq) > 0 {
 		out["stopSequences"] = stopSeq
 	}
+	applyClaudeThinkingToGeminiConfig(req, out)
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// applyClaudeThinkingToGeminiConfig 把 Claude 的 thinking 字段映射成 Gemini 的 thinkingConfig。
+//
+// 【为什么】Gemini 只有在 generationConfig.thinkingConfig.includeThoughts=true 时才会返回
+// thought part；不带这个开关时模型照样思考、思考 token 照样按 output 计费，但摘要一律不返回
+// （2026-08-19 直连 v1internal 实测：不带开关 thought_parts=0 而 thoughtsTokenCount=615）。
+//
+// 【为什么补在这里】claude-* 与 gemini-* 走两个不同的转换器：claude-* 走 antigravity 包的
+// TransformClaudeToGeminiWithOptions（本来就处理 thinking），gemini-* 走本函数——而本函数
+// 原先只认 max_tokens/temperature/top_p/stop_sequences，thinking 被整个丢掉。表现为
+// OpenAI 协议入口（/v1/responses、/v1/chat/completions）打 gemini-* 模型永远看不到思考过程，
+// 而同一个模型走 /v1/messages 正常。
+//
+// 语义与 antigravity.buildGenerationConfig 对齐：type=enabled/adaptive 才开；budget_tokens>0
+// 用显式预算，否则 -1（动态）；gemini-2.5-flash 有 24576 上限；max_tokens 必须大于 budget。
+func applyClaudeThinkingToGeminiConfig(req map[string]any, out map[string]any) {
+	thinking, ok := req["thinking"].(map[string]any)
+	if !ok {
+		return
+	}
+	thinkingType, _ := thinking["type"].(string)
+	if thinkingType != "enabled" && thinkingType != "adaptive" {
+		return
+	}
+
+	budget := -1
+	if b, ok := asInt(thinking["budget_tokens"]); ok && b > 0 {
+		budget = b
+	}
+
+	if budget > 0 {
+		model, _ := req["model"].(string)
+		if strings.Contains(model, "gemini-2.5-flash") && budget > antigravity.Gemini25FlashThinkingBudgetLimit {
+			budget = antigravity.Gemini25FlashThinkingBudgetLimit
+		}
+		// max_tokens 必须大于 budget_tokens，否则上游 400。与 antigravity 侧同一套 padding。
+		if maxTokens, ok := asInt(out["maxOutputTokens"]); ok && maxTokens > 0 && maxTokens <= budget {
+			out["maxOutputTokens"] = budget + antigravity.MaxTokensBudgetPadding
+		}
+	}
+
+	out["thinkingConfig"] = map[string]any{
+		"includeThoughts": true,
+		"thinkingBudget":  budget,
+	}
 }
 
 func (s *GeminiMessagesCompatService) extractImageInputSize(body []byte) string {
