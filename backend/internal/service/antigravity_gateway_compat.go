@@ -452,6 +452,13 @@ func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBody(
 		if err != nil {
 			return nil, err
 		}
+		// 【定制】保留「丢内置搜索、保函数工具」，不采用上游 v0.1.178 的
+		// enableMixedGeminiToolInvocations（注入 includeServerSideToolInvocations=true）。
+		// 该开关在本仓库默认的 daily 端点上实测无效：2026-08-19 直连
+		// daily-cloudcode-pa.googleapis.com，camel/snake 两种拼写都照旧返回
+		// 400 "Please enable tool_config.include_server_side_tool_invocations"。
+		// （prod 端点无法用现有账号验证——g1-pro-tier 打 prod 一律 429，被 429 挡住看不到 400。）
+		// 详见 dropAntigravityBuiltinToolsWhenFunctionsPresent 的注释与 CUSTOM_CHANGES.md。
 		body = dropAntigravityBuiltinToolsWhenFunctionsPresent(body)
 		body = ensureGeminiFunctionCallThoughtSignatures(body)
 		body, err = injectIdentityPatchToGeminiRequest(body)
@@ -467,6 +474,38 @@ func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBody(
 	options := s.getClaudeTransformOptions(ctx)
 	options.EnableIdentityPatch = true
 	return antigravity.TransformClaudeToGeminiWithOptions(claudeRequest, projectID, mappedModel, options)
+}
+
+func enableMixedGeminiToolInvocations(body []byte) ([]byte, error) {
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil, err
+	}
+
+	var hasGoogleSearch, hasFunctionDeclarations bool
+	if tools, ok := request["tools"].([]any); ok {
+		for _, rawTool := range tools {
+			tool, ok := rawTool.(map[string]any)
+			if !ok {
+				continue
+			}
+			_, hasSearch := tool["googleSearch"]
+			declarations, hasFunctions := tool["functionDeclarations"].([]any)
+			hasGoogleSearch = hasGoogleSearch || hasSearch
+			hasFunctionDeclarations = hasFunctionDeclarations || hasFunctions && len(declarations) > 0
+		}
+	}
+	if !hasGoogleSearch || !hasFunctionDeclarations {
+		return body, nil
+	}
+
+	toolConfig, _ := request["toolConfig"].(map[string]any)
+	if toolConfig == nil {
+		toolConfig = make(map[string]any)
+		request["toolConfig"] = toolConfig
+	}
+	toolConfig["includeServerSideToolInvocations"] = true
+	return json.Marshal(request)
 }
 
 func antigravityCompatProxyURL(account *Account) string {

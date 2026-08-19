@@ -223,6 +223,55 @@ func TestAntigravityCompatRejectsUnsupportedAccountType(t *testing.T) {
 	}
 }
 
+// 【定制】上游 v0.1.178 在混用内置搜索与函数工具时注入
+// toolConfig.includeServerSideToolInvocations=true（enableMixedGeminiToolInvocations）。
+// 本仓库不采用——该开关在默认的 daily 端点上实测无效（2026-08-19 直连实测，camel/snake
+// 两种拼写都照旧 400），我们改为丢内置搜索、保函数工具。
+// 因此混用场景断言反过来：**不应**出现该字段。合并上游时勿改回 wantField: true。
+func TestBuildAntigravityCompatGeminiBody_ConfiguresMixedToolInvocations(t *testing.T) {
+	svc := &AntigravityGatewayService{}
+	tests := []struct {
+		name      string
+		tools     string
+		wantField bool
+	}{
+		{
+			name:  "mixed server and client tools (定制：丢内置搜索，不注入开关)",
+			tools: `[{"name":"get_weather","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]`,
+		},
+		{
+			name:  "client tools only",
+			tools: `[{"name":"get_weather","input_schema":{"type":"object"}}]`,
+		},
+		{
+			name:  "server tools only",
+			tools: `[{"type":"web_search_20250305","name":"web_search"}]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claudeBody := []byte(`{"messages":[{"role":"user","content":"hello"}],"tools":` + tt.tools + `}`)
+			claudeBody = bytes.ReplaceAll(claudeBody, []byte{92}, nil)
+			body, err := svc.buildAntigravityCompatGeminiBody(context.Background(), claudeBody, nil, "project-1", "gemini-2.5-flash")
+			require.NoError(t, err)
+
+			var wrapped map[string]any
+			require.NoError(t, json.Unmarshal(body, &wrapped))
+			request, ok := wrapped["request"].(map[string]any)
+			require.True(t, ok)
+			toolConfig, exists := request["toolConfig"].(map[string]any)
+			if !tt.wantField {
+				require.False(t, exists)
+				return
+			}
+			require.True(t, exists)
+			require.Equal(t, true, toolConfig["includeServerSideToolInvocations"])
+			require.NotContains(t, toolConfig, "include_server_side_tool_invocations")
+		})
+	}
+}
+
 func TestAntigravityCompatPreservesChatTokenLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []struct {

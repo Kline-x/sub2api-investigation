@@ -46,7 +46,8 @@ vi.mock('@/api/admin', () => ({
       batchRefresh: vi.fn(),
       toggleSchedulable: vi.fn()
     },
-    proxies: { getAll: getAllProxies },
+    // 【定制】AccountsView 用 getAllWithCount，见 usageWindowsHint.spec.ts 注释
+    proxies: { getAll: getAllProxies, getAllWithCount: getAllProxies },
     groups: { getAll: getAllGroups }
   }
 }))

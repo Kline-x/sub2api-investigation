@@ -2658,18 +2658,23 @@ onMounted(async () => {
 
   load()
   loadUpstreamBillingProbeGlobalState()
-loadAccountPatrolState()
-  try {
-    // 用 getAllWithCount：裸 getAll 不返回 latency_ms / quality_* / country，
-    // 代理选择器就无法展示延迟、也无法按延迟排序。
-    const [p, g] = await Promise.all([
-      adminAPI.proxies.getAllWithCount(),
-      adminAPI.groups.getAll()
-    ])
-    proxies.value = p
-    groups.value = g
-  } catch (error) {
-    console.error('Failed to load proxies/groups:', error)
+  loadAccountPatrolState()
+  // 【定制】代理用 getAllWithCount：裸 getAll 不返回 latency_ms / quality_* / country，
+  // 代理选择器就无法展示延迟、也无法按延迟排序。合并上游时勿改回 getAll。
+  // 错误隔离沿用上游 v0.1.178 的 allSettled——一个接口失败不再拖垮另一个。
+  const [proxiesResult, groupsResult] = await Promise.allSettled([
+    adminAPI.proxies.getAllWithCount(),
+    adminAPI.groups.getAll()
+  ])
+  if (proxiesResult.status === 'fulfilled') {
+    proxies.value = proxiesResult.value
+  } else {
+    console.error('Failed to load proxies:', proxiesResult.reason)
+  }
+  if (groupsResult.status === 'fulfilled') {
+    groups.value = groupsResult.value
+  } else {
+    console.error('Failed to load groups:', groupsResult.reason)
   }
   window.addEventListener('scroll', handleScroll, true)
   document.addEventListener('click', handleClickOutside)

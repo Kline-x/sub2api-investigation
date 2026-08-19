@@ -17,6 +17,104 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.178-custom.1（2026-08-19，合并上游 v0.1.178）
+
+Codex 接 Antigravity 的三处修复 + 上游 v0.1.178 合并（112 个提交）。
+
+### 1. Codex 私有工具协议接入 Antigravity Responses 入口
+
+`ForwardAsResponses` 接上 `apicompat.AdaptResponsesClientTools`：`tool_search` / `namespace` /
+`custom` 三类 Codex 专有工具降级成普通 function 工具，回程还原成 `tool_search_call` /
+`custom_tool_call` / 带 `namespace` 的 `function_call`。
+
+原先这三类走 `convertResponsesToAnthropicTools` 的 `default` 分支原样透传：`tool_search` 无 name，
+被 `buildTools` 以 "skipping tool with empty name" 丢弃；`namespace` 变成空参数的假函数、子工具全丢。
+降级/还原逻辑是上游为 OpenAI / Grok 路径写好的，一直没接到 Antigravity 上。
+
+实测：上游 functionDeclarations 变为 `tool_search` / `codex_app__create_thread` / `shell` /
+`apply_patch`（namespace 本体与裸子工具均消失），模型实际调用 tool_search，客户端收到
+`execution:"client"` 的 `tool_search_call`。
+
+> ⚠️ 注意：`unsupported call: multi_agent_v1` **不是**这个缺口导致的——Codex 经 cc-switch
+> 转成 `/v1/messages` 时不经过本路径，rollout 统计显示修复前子 agent 本就能起（成功 11 次
+> 对 5 次报错）。该报错是模型偶发把 namespace 名当函数调。本项修的是「Codex 直连
+> sub2api `/v1/responses`」这条路。
+
+### 2. gemini-\* 模型丢 thinking（OpenAI 协议入口无思考过程）
+
+`convertClaudeGenerationConfig` 只认 max_tokens/temperature/top_p/stop_sequences，`thinking`
+被整个丢掉 → 不生成 `thinkingConfig.includeThoughts` → 上游照样思考、思考 token 照样按 output
+计费，但摘要一律不返回。
+
+**根因是两个转换器**：claude-\* 走 `antigravity.TransformClaudeToGeminiWithOptions`（本来就处理
+thinking），gemini-\* 走 `convertClaudeMessagesToGeminiGenerateContent`。所以「同模型走
+/v1/messages 有思考、走 /v1/responses 没有」。语义与 `buildGenerationConfig` 对齐：
+enabled/adaptive 才开、budget>0 用显式预算否则 -1、gemini-2.5-flash 封顶 24576、
+max_tokens 必须大于 budget。护栏 `service/gemini_thinking_config_test.go`。
+
+### 3. reasoning summary part 生命周期（思考过程渲染不出来的真正原因）
+
+`Anthropic thinking → Responses` 的事件流缺两环且 done 是空的：缺
+`reasoning_summary_part.added` / `.done`，`reasoning_summary_text.done` 的 text 为 `""`。
+codex 按 part 生命周期渲染推理，没有 part.added 就没有可写入的槽位；function_call 那条链路
+生命周期完整（arguments.delta/done），所以工具调用能显示——正是这个对比暴露了问题。
+wire 层本来就支持这两个事件（`summaryTextPartWire`），只是转换器没发过。
+⚠️ `summary` 必须在 `closeCurrentResponsesItem` 之前取——它会重置 `CurrentSummary`。
+护栏 `apicompat/reasoning_summary_part_test.go`。
+
+### 4. 调试快照覆盖 Antigravity
+
+`SUB2API_DEBUG_GATEWAY_BODY` 原先只挂在 `GatewayService.Forward`（Anthropic 平台账号），打
+Antigravity 时日志 0 字节。句柄提为包级 + `DebugLogGatewaySnapshot` 入口，在 messages /
+responses / chat_completions 三个入口落 `CLIENT_ORIGINAL`，并加落 `ANTHROPIC_INTERMEDIATE`
+与 `UPSTREAM_FORWARD`，可直接看出字段丢在哪一层。不设环境变量时零开销。
+
+### 上游 v0.1.178 合并要点（冲突解法）
+
+| 文件 | 解法 |
+|---|---|
+| `antigravity_gateway_compat.go` | **保定制**：继续用 `dropAntigravityBuiltinToolsWhenFunctionsPresent`，不采用上游 `enableMixedGeminiToolInvocations`。该开关在本仓库默认的 daily 端点上**实测无效**（2026-08-19 直连 daily-cloudcode-pa，camel/snake 两种拼写都照旧 400）。prod 端点无法用现有账号验证——g1-pro-tier 打 prod 一律 429，400 被 429 挡住 |
+| `ratelimit_service.go` | 并集：保留定制 `tempUnschedEntryCounter` + 上游新增 `openaiTeamLinked*` |
+| `wire_gen.go` | 用 `wire` 工具重新生成（勿手拼）：定制 `accountPatrolService` 与上游 `cnProviderHandler` 都在 |
+| `AccountsView.vue` | 并集：保留定制 `loadAccountPatrolState()` 与 `proxies.getAllWithCount()`（裸 getAll 不返回 latency_ms/quality_*/country），错误隔离采用上游的 `Promise.allSettled` |
+| `admin_service_bulk_update_test.go` | 采用上游字段名 `bulkUpdateCalls`/`lastBulkUpdate`，定制的到期时间三态测试改用新字段名并保留 |
+| `VERSION` | `0.1.178-custom.1` |
+
+**改了两条上游测试断言**（定制行为使然，合并上游必查）：
+- `antigravity/request_transformer_test.go` 的 `TestGeminiToolConfig_IncludeServerSideToolInvocations`
+  混用子测试 → 断言「不开该开关、内置搜索被丢、函数工具保住」
+- `service/antigravity_gateway_compat_test.go` 的
+  `TestBuildAntigravityCompatGeminiBody_ConfiguresMixedToolInvocations` 混用用例 `wantField: false`
+
+**前端两个上游 mock 补 `getAllWithCount`**（`AccountsView.usageWindowsHint.spec.ts` /
+`AccountsView.sparkShadow.spec.ts`）；`CreateAccountModal.grok.spec.ts` 的占位符断言从三元写法
+改为 switch 写法（`return 'xai-...'`）——上游早已改成 switch，该断言合并前就是红的。
+
+### 测试
+
+- 后端 `-tags unit ./...`：53 个包 ok
+- 前端 `vue-tsc --noEmit` 干净；`vitest run` 230 文件 / 1630 用例全绿
+- 已知非回归失败：
+  - `TestLoadForBootstrapAllowsMissingJWTSecret` / `TestLoadDefaultServerMode` /
+    `TestLoadDefaultDatabaseSSLMode` —— **本机环境污染**，非代码问题。`configureConfigSource`
+    有 `addConfigPath("/app/data")`（给 Docker 用），在 E 盘跑测试时解析成 `E:pp\data`，
+    而本机恰好存在 `E:pp\data\config.yaml`（`mode: debug`）被 viper 读入。
+    在 C 盘 worktree 跑同样代码全部通过
+  - `TestContentModerationRuntimeSnapshotRefreshFailureKeepsStaleConfig` —— AGENTS.md 记录的
+    已知偶发（单跑 5 次 4 过 1 挂）
+
+### 模型能力边界（非缺陷，勿再排查）
+
+Gemini 在「本回合要调工具」时**不产出 thought 摘要**：三个模型（`gemini-3.6-flash-high` /
+`gemini-pro-agent` / `gemini-3.7-flash-tiered`）实测全 0 段、思考 token 仅 45~162；换成不需要
+工具的逻辑谜题则 2~3 段、700~1100 token。官方 gpt-5.6 在工具回合也输出摘要（7 月 rollout 里
+`agent_reasoning` 696 个）。**纯模型差异，代理侧无解、换模型也无解**——agentic 流程里绝大多数
+回合看不到推理属正常。
+
+其他已确认：`includeThoughts` 只控制返不返回摘要，不控制模型想不想（不带开关照样耗思考 token
+并计费）；`-tiered` 忽略客户端 thinkingBudget，`-high` 尊重；Antigravity 没有 effort 入参，
+推理档位靠模型名后缀表达。
+
 ## v0.1.177-custom.6（2026-08-17）
 
 **修复 Codex / CC Switch 打 Antigravity 必定 400**：内置工具（`googleSearch`）与函数工具
