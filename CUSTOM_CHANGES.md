@@ -17,6 +17,56 @@
 
 **已知范围限制**：仅支持 ss 协议 + obfs 的 tls 模式（当前订阅所用）；不支持 vmess/vless/hysteria2、不支持 ss-2022 密码套件、不支持 obfs 的 http 模式、不做 UDP；订阅同步为手动触发，**不做定时自动同步**（自动删除下线节点会让绑定它的账号悬空，需独立的状态机，YAGNI）。
 
+## v0.1.178-custom.2（2026-08-20，未发布）
+
+修 Codex 经协议桥打 Antigravity 时「正在重新连接 1/5」死循环。
+
+### 1. max_tokens 过小导致响应被截断（真因）
+
+**现象**：Codex 里让模型写完整 HTML，界面显示「正在重新连接 1/5」，反复重试永远不成功。
+客户端报错原文：`stream disconnected before completion: Incomplete response returned,
+reason: max_output_tokens`。
+
+**链条**：Codex 本身不指定 max_output_tokens（Responses 协议里省略的语义是「用模型默认
+上限」）→ 协议桥（cc-switch 把 Codex 的 Responses 请求转成 Anthropic `/v1/messages`）必须
+给 Anthropic 的必填字段 `max_tokens` 填个值，实测填 8192 → 转发上游
+`maxOutputTokens: 8192` → 写完整 HTML 实测需要 **12,872** 输出 token → 上游回
+`finishReason: MAX_TOKENS` → 响应不完整 → Codex 判定流未完成后**原样重试** → 死循环。
+
+**修法**：两条入口都把过小的上限抬到模型自身能力（65536，Antigravity 模型目录里
+gemini-3.x 的官方值）。`maxOutputTokens` 是上限不是预留，抬高不影响计费（按实际 token
+计）与短回答；客户端显式要求更大值时尊重原值。
+
+- `antigravity_gateway_claude.go` 的 `Forward`（**`/v1/messages` 入口，协议桥走这条**）
+- `antigravity_gateway_compat.go` 的 `ForwardAsResponses`（`/v1/responses` 直连入口，
+  客户端没传 max_output_tokens 时不再用 8192 兜底）
+
+> ⚠️ 定位教训：真实流量走的是 **`/v1/messages`**，不是 `/v1/responses`。判据是调试快照的
+> 段落结构——真实请求只有 `CLIENT_ORIGINAL` + `UPSTREAM_FORWARD`，缺 `ANTHROPIC_INTERMEDIATE`
+> （那段只在 Responses 兼容路径打点）。前几轮补丁全打在 Responses 路径上，流量一次都没
+> 经过，所以「本地验证通过、用户仍复现」。下次排这类问题先用快照确认路径。
+
+### 2. 思考期心跳（顺带修，非本次主因）
+
+`antigravity_gateway_compat_stream.go` 的 keepalive 原先被 `hasMeaningfulData()` 完全挡住：
+必须先有实质数据才发心跳。上游把 thought 整段缓冲时会几十秒不吐字节，这期间对客户端完全
+静默，容易被判定连接假死。改为超过 15 秒宽限期后照发 SSE 注释心跳（`: ping`，不构成任何
+事件）。宽限期的取舍：短于上游快速失败的返回时间会牺牲「空流换号重试」，长于客户端空闲
+判定就起不到保活作用。新增 `earlyPingSent` 标记——发过早期心跳后响应头已落定，空流不再
+返回可重试错误。
+
+### 3. thinkingConfig 的 maxOutputTokens 算法
+
+`maxOutputTokens` 是「思考 + 正文」之和的上限，原先只在其上加 1000 padding（只为满足
+「max > budget」的格式要求），正文没有活路：effort=high 给 budget=10240 时上限只有 11240，
+思考吃掉 3700+ 后正文仅剩 7500。改为 `budget + max(客户端申请值, 8192)`，上限 65536 封顶。
+
+### 测试
+
+`internal/service` / `internal/pkg/antigravity` / `internal/pkg/apicompat` 三包 `-tags unit`
+通过（仅 `TestContentModerationRuntimeSnapshotRefreshFailureKeepsStaleConfig` 这条 AGENTS.md
+记录的已知偶发失败）。`gemini_thinking_config_test.go` 补了三条额度断言。
+
 ## v0.1.178-custom.1（2026-08-19，合并上游 v0.1.178）
 
 Codex 接 Antigravity 的三处修复 + 上游 v0.1.178 合并（112 个提交）。

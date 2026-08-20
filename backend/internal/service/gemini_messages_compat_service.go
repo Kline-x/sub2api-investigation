@@ -3699,6 +3699,14 @@ func convertClaudeGenerationConfig(req map[string]any) map[string]any {
 	return out
 }
 
+const (
+	// geminiThinkingMinContentAllowance 启用思考时给「正文」保底的额度。
+	// maxOutputTokens 是思考+正文之和的上限，正文额度太小会让长输出撞 MAX_TOKENS。
+	geminiThinkingMinContentAllowance = 8192
+	// geminiMaxOutputTokensCeiling 上游模型目录里 gemini-3.x 的 maxOutputTokens 上限。
+	geminiMaxOutputTokensCeiling = 65536
+)
+
 // applyClaudeThinkingToGeminiConfig 把 Claude 的 thinking 字段映射成 Gemini 的 thinkingConfig。
 //
 // 【为什么】Gemini 只有在 generationConfig.thinkingConfig.includeThoughts=true 时才会返回
@@ -3733,9 +3741,28 @@ func applyClaudeThinkingToGeminiConfig(req map[string]any, out map[string]any) {
 		if strings.Contains(model, "gemini-2.5-flash") && budget > antigravity.Gemini25FlashThinkingBudgetLimit {
 			budget = antigravity.Gemini25FlashThinkingBudgetLimit
 		}
-		// max_tokens 必须大于 budget_tokens，否则上游 400。与 antigravity 侧同一套 padding。
-		if maxTokens, ok := asInt(out["maxOutputTokens"]); ok && maxTokens > 0 && maxTokens <= budget {
-			out["maxOutputTokens"] = budget + antigravity.MaxTokensBudgetPadding
+		// maxOutputTokens 必须同时容下「思考」和「正文」——它是两者之和的上限，不是只管正文。
+		//
+		// 【为什么不能只加 1000 的 padding】Codex 不传 max_output_tokens，
+		// ResponsesToAnthropicRequest 默认 max_tokens=8192，effort=high 给 budget=10240，
+		// 只加 padding 会得到 maxOutputTokens=11240——思考吃掉 3700+ 后正文只剩 7500，
+		// 写一个完整 HTML 根本不够，上游回 finishReason=MAX_TOKENS，响应被截断且没有可用
+		// 结果，客户端判定失败后原样重试，表现为 Codex 界面「正在重新连接 1/5」死循环
+		// （2026-08-20 实测：max=11240 → MAX_TOKENS；max=65536 同任务 → STOP，正文 12872 token）。
+		//
+		// 所以按「思考预算 + 正文额度」取，正文额度不低于客户端申请值也不低于 8192，
+		// 并以模型上限 65536 兜底（Antigravity 目录里 gemini-3.x 全是这个值）。
+		if maxTokens, ok := asInt(out["maxOutputTokens"]); ok && maxTokens > 0 {
+			contentAllowance := maxTokens
+			if contentAllowance < geminiThinkingMinContentAllowance {
+				contentAllowance = geminiThinkingMinContentAllowance
+			}
+			if want := budget + contentAllowance; want > maxTokens {
+				if want > geminiMaxOutputTokensCeiling {
+					want = geminiMaxOutputTokensCeiling
+				}
+				out["maxOutputTokens"] = want
+			}
 		}
 	}
 

@@ -147,6 +147,9 @@ type antigravityCompatStreamSession struct {
 	firstTokenMs   *int
 	startTime      time.Time
 	meaningfulData bool
+	// earlyPingSent 表示在出现实质数据之前就给客户端发过心跳。一旦发过，HTTP 200 与
+	// 响应头已经落定，空流不能再走「换号重试」路径（那会在已开始的响应上再写一次）。
+	earlyPingSent bool
 }
 
 func newAntigravityCompatStreamSession(
@@ -340,7 +343,9 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 			if writer.Disconnected() {
 				return session.collectResult(true), nil
 			}
-			if !session.hasMeaningfulData() {
+			// 已经发过思考期心跳时不能再返回可重试错误：响应头已落定，
+			// 换号重试会在同一个已开始的响应上二次写入。
+			if !session.hasMeaningfulData() && !session.earlyPingSent {
 				return nil, antigravityCompatEmptyStreamError()
 			}
 			logger.LegacyPrintf("service.antigravity_gateway", "Stream data interval timeout (%s)", prefix)
@@ -348,8 +353,27 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 			return session.collectResult(false), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
-			if session.hasMeaningfulData() && !writer.Disconnected() {
+			if writer.Disconnected() {
+				continue
+			}
+			if session.hasMeaningfulData() {
 				writer.Write([]byte(": ping\n\n"))
+				continue
+			}
+			// 【定制】思考期心跳。Gemini 在 includeThoughts 打开后会把 thought 整段缓冲，
+			// 首字延迟实测 26~35 秒；这期间原逻辑（心跳被 hasMeaningfulData 挡住）对客户端
+			// 一个字节都不发，Codex 判定连接假死，界面显示「正在重新连接 1/5」并不断重试，
+			// 每次重试又是同样的静默窗口，形成死循环（2026-08-20 实测：连续 4 条
+			// output_tokens=0、first_token_ms 26~30s 的记录）。
+			//
+			// SSE 注释（": ping"）不构成任何事件，客户端解析器会忽略，只用于保活。
+			// 用宽限期而非无条件发：上游快速失败（4xx/5xx）通常几秒内返回，宽限期内保持
+			// 静默，空流仍可走「换号重试」；超过宽限期说明模型确实在思考，此时保活的价值
+			// 大于重试的价值。
+			if time.Since(session.startTime) >= antigravityCompatThinkingPingGrace {
+				if writer.Write([]byte(": ping\n\n")) {
+					session.earlyPingSent = true
+				}
 			}
 		}
 	}
@@ -409,6 +433,11 @@ func (s *AntigravityGatewayService) newAntigravityCompatKeepaliveTicker() (*time
 	ticker := time.NewTicker(interval)
 	return ticker, ticker.C
 }
+
+// antigravityCompatThinkingPingGrace 思考期心跳的宽限期。
+// 短于上游快速失败的返回时间（几秒）会牺牲换号重试；长于客户端的空闲判定
+// （Codex 实测约 30 秒）就起不到保活作用。15 秒取中。
+const antigravityCompatThinkingPingGrace = 15 * time.Second
 
 func newAntigravityCompatTimer(timeout time.Duration) (*time.Timer, <-chan time.Time) {
 	if timeout <= 0 {

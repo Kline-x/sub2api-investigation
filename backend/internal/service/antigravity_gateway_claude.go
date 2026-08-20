@@ -60,6 +60,22 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		})
 	}
 
+	// 【定制】把过小的 max_tokens 抬到模型自身的输出上限。
+	//
+	// Anthropic 协议要求 max_tokens 必填，所以协议桥（cc-switch 等把 Codex 的 Responses
+	// 请求转成 /v1/messages 的中间层）必须填一个值，实测填的是 8192——而 Codex 那边
+	// 原本压根没指定，语义应当是「用模型默认上限」。8192 对写代码这类长输出远远不够：
+	// 「用 SVG 画一个完整 HTML 动画」实测需要 12000+ 输出 token，撞上限后上游回
+	// finishReason=MAX_TOKENS，客户端收到
+	// `Incomplete response returned, reason: max_output_tokens`，判定流未完成后原样重试，
+	// 表现为 Codex 界面「正在重新连接 1/5」死循环（2026-08-20 实测定位）。
+	//
+	// maxOutputTokens 只是上限、不预留配额，抬高不影响计费（按实际 token 计），
+	// 也不影响本来就短的回答。客户端显式要求更大的值时尊重原值。
+	if claudeReq.MaxTokens > 0 && claudeReq.MaxTokens < geminiMaxOutputTokensCeiling {
+		claudeReq.MaxTokens = geminiMaxOutputTokensCeiling
+	}
+
 	originalModel := claudeReq.Model
 	mappedModel := s.getMappedModel(account, claudeReq.Model)
 	if mappedModel == "" {

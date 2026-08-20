@@ -150,6 +150,19 @@ func (s *AntigravityGatewayService) ForwardAsResponses(
 	if err != nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 	}
+	// 【定制】客户端没传 max_output_tokens 时，用模型自身的输出上限，而不是
+	// ResponsesToAnthropicRequest 的兜底值 8192。
+	//
+	// Responses 协议里省略 max_output_tokens 的语义是「用模型默认上限」，不是「8192」。
+	// Codex 就不传这个字段，8192 对写代码这类长输出远远不够——实测「用 SVG 画一个完整
+	// HTML 动画」需要 12000+ 输出 token，撞上限后上游回 finishReason=MAX_TOKENS，
+	// 客户端收到 `Incomplete response returned, reason: max_output_tokens`，
+	// 判定流未完成后原样重试，表现为「正在重新连接 1/5」死循环（2026-08-20 实测）。
+	//
+	// 只在客户端确实没指定时抬高；显式指定的值一律尊重。
+	if request.MaxOutputTokens == nil || *request.MaxOutputTokens <= 0 {
+		claudeRequest.MaxTokens = geminiMaxOutputTokensCeiling
+	}
 	claudeRequest.Stream = request.Stream
 	claudeBody, err := json.Marshal(claudeRequest)
 	if err != nil {
